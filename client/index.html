@@ -112,26 +112,42 @@
     .hero-card img{aspect-ratio:16/9}
     .screen{padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(20px,env(safe-area-inset-bottom));align-items:flex-start;justify-content:flex-start}
     .neon-title{letter-spacing:.12em}
-    /* Compact HUD on mobile */
-    .hud{font-size:9px;gap:3px;left:6px;top:6px}
-    .hud .pill{padding:3px 6px;border-radius:6px;font-size:9px}
-    .hud .hp .bar{width:140px;height:7px}
-    .hud .hp #hpName{min-width:54px!important;font-size:10px}
-    .hud .hp #hpVal{min-width:48px!important;font-size:10px}
-    .hud .cd .k{padding:3px 5px;min-width:42px;font-size:9px}
-    .topright{right:6px;top:6px;font-size:9px}
-    .topright .pill{padding:3px 6px;font-size:9px}
-    .topright .btn{padding:4px 8px!important;font-size:10px!important}
+    /* Ultra-compact HUD on mobile */
+    .hud{font-size:7px;gap:2px;left:4px;top:4px;letter-spacing:.04em}
+    .hud .pill{padding:2px 4px;border-radius:4px;font-size:7px}
+    .hud .hp{gap:4px}
+    .hud .hp .bar{width:90px;height:5px;border-radius:3px}
+    .hud .hp #hpName{min-width:40px!important;font-size:7px}
+    .hud .hp #hpVal{min-width:36px!important;font-size:7px}
+    .hud .cd{gap:3px}
+    .hud .cd .k{padding:2px 3px;min-width:30px;font-size:7px}
+    .topright{right:4px;top:4px;font-size:7px;gap:3px}
+    .topright .pill{padding:2px 4px;font-size:7px}
+    .topright .btn{padding:3px 6px!important;font-size:8px!important;min-height:0!important;letter-spacing:.06em!important}
     .btn{padding:14px 16px;min-height:48px;font-size:13px;width:100%}
     .row{flex-direction:column}
     .row .btn{width:100%}
   }
+  /* Loading screen */
+  #loadingScreen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(1200px 800px at 50% 50%, rgba(157,92,255,.18), transparent 60%),var(--bg);font-family:"Orbitron",monospace;}
+  #loadingScreen.hide{opacity:0;pointer-events:none;transition:opacity .5s ease}
+  #loadingScreen .ltitle{font-size:clamp(22px,4vw,42px);font-weight:900;letter-spacing:.2em;background:linear-gradient(90deg,#22e8ff,#9d5cff 50%,#ff2bd6);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:24px;text-align:center;padding:0 16px}
+  #loadingScreen .lbar{width:min(420px,80vw);height:10px;background:rgba(255,255,255,.08);border:1px solid rgba(157,92,255,.4);border-radius:6px;overflow:hidden;box-shadow:0 0 20px rgba(157,92,255,.3)}
+  #loadingScreen .lbar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#22e8ff,#ff2bd6);transition:width .2s ease;box-shadow:0 0 12px rgba(34,232,255,.6)}
+  #loadingScreen .lpct{margin-top:10px;color:var(--cyan);letter-spacing:.3em;font-size:12px}
+  #loadingScreen .ltask{margin-top:6px;color:var(--muted);font-size:10px;letter-spacing:.2em;text-transform:uppercase;min-height:14px}
   .desktop-only{display:inline}
   @media (hover:none) and (pointer:coarse){ .desktop-only{display:none} }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
 </head>
 <body class="scanlines">
+<div id="loadingScreen">
+  <div class="ltitle">NEURAL SURVIVAL</div>
+  <div class="lbar"><i id="loadBar"></i></div>
+  <div class="lpct" id="loadPct">0%</div>
+  <div class="ltask" id="loadTask">INITIALIZING…</div>
+</div>
 <canvas id="game"></canvas>
 
 <div class="ui">
