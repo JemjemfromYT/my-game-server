@@ -1,0 +1,15 @@
+{
+  "name": "neural-survival-server",
+  "version": "1.0.0",
+  "description": "Colyseus lobby server for Neural Survival",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^2.0.36",
+    "colyseus": "^0.15.18",
+    "express": "^4.19.2"
+  }
+}

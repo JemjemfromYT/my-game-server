@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Neural Survival: Fracture Realm</title>
+  <meta name="description" content="Neon cyberpunk top-down survival arena with hero classes, real-time multiplayer lobbies and a reality-bending Fracture system." />
+<style>
+  :root{
+    --bg:#05030d;
+    --panel:rgba(10,8,28,.78);
+    --panel-2:rgba(20,14,48,.85);
+    --cyan:#22e8ff;
+    --magenta:#ff2bd6;
+    --violet:#9d5cff;
+    --green:#3dffb0;
+    --orange:#ff8a3d;
+    --red:#ff3d6a;
+    --text:#e7e3ff;
+    --muted:#8a85b8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;-webkit-user-select:none;user-select:none}
+  body{background:radial-gradient(1200px 800px at 70% 20%, rgba(157,92,255,.18), transparent 60%),radial-gradient(900px 700px at 20% 80%, rgba(34,232,255,.14), transparent 60%),var(--bg);}
+  #game{position:fixed;inset:0;display:block;image-rendering:pixelated}
+  .ui{position:fixed;inset:0;pointer-events:none;z-index:10}
+  .ui > *{pointer-events:auto}
+  .panel{background:var(--panel);backdrop-filter: blur(10px);border:1px solid rgba(157,92,255,.35);box-shadow: 0 0 0 1px rgba(34,232,255,.08), 0 20px 60px rgba(0,0,0,.6), inset 0 0 40px rgba(157,92,255,.05);border-radius:14px;}
+  .neon-title{font-family:"Orbitron","Audiowide",ui-monospace,monospace;font-weight:900; letter-spacing:.18em; text-transform:uppercase;background: linear-gradient(90deg,#22e8ff,#9d5cff 50%,#ff2bd6);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow: 0 0 30px rgba(157,92,255,.35);}
+  .btn{appearance:none;border:1px solid rgba(34,232,255,.5);background:linear-gradient(180deg, rgba(34,232,255,.12), rgba(157,92,255,.12));color:var(--text); padding:12px 18px; border-radius:10px; cursor:pointer;font-family:inherit; font-weight:700; letter-spacing:.12em; text-transform:uppercase;transition: transform .08s ease, box-shadow .15s ease, background .15s ease;box-shadow: 0 0 20px rgba(34,232,255,.18), inset 0 0 12px rgba(157,92,255,.12);}
+  .btn:hover{transform:translateY(-1px); box-shadow:0 0 30px rgba(34,232,255,.35), inset 0 0 18px rgba(255,43,214,.18)}
+  .btn.primary{border-color:rgba(255,43,214,.6); background:linear-gradient(180deg, rgba(255,43,214,.18), rgba(157,92,255,.18))}
+  .btn.ghost{background:transparent; border-color:rgba(231,227,255,.25)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .input{background:rgba(0,0,0,.45); border:1px solid rgba(157,92,255,.35); color:var(--text);padding:10px 12px; border-radius:8px; font-family:inherit; letter-spacing:.08em;}
+  .screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .screen .inner{max-width:1100px;width:100%;margin:auto}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .col{display:flex;flex-direction:column;gap:14px}
+  .grid{display:grid;gap:14px}
+  .heroes{grid-template-columns:repeat(5,minmax(0,1fr))}
+  @media (max-width: 900px){ .heroes{grid-template-columns:repeat(2,1fr)} }
+  .hero-card{cursor:pointer;border-radius:14px;overflow:hidden;border:1px solid rgba(157,92,255,.3);background:var(--panel-2);transition:transform .12s ease, box-shadow .15s ease}
+  .hero-card:hover{transform:translateY(-3px);box-shadow:0 10px 40px rgba(34,232,255,.25)}
+  .hero-card.selected{border-color:var(--magenta);box-shadow:0 0 0 2px rgba(255,43,214,.5),0 0 40px rgba(255,43,214,.35)}
+  .hero-card img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block;background:#000}
+  .hero-card .meta{padding:10px 12px}
+  .hero-card h3{margin:0 0 4px;font-family:"Orbitron",monospace;letter-spacing:.12em}
+  .hero-card .role{color:var(--cyan);font-size:11px;letter-spacing:.18em;text-transform:uppercase}
+  .hero-card .stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;font-size:11px;color:var(--muted)}
+  .stat-bar{height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden}
+  .stat-bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--magenta))}
+  .hud{position:fixed;left:14px;top:14px;display:flex;flex-direction:column;gap:6px;font-size:12px;letter-spacing:.1em}
+  .hud .pill{padding:6px 10px;border-radius:8px;background:rgba(0,0,0,.45);border:1px solid rgba(157,92,255,.3)}
+  .hud .hp{display:flex;align-items:center;gap:8px}
+  .hud .hp .bar{width:240px;height:10px;background:rgba(255,255,255,.08);border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.12)}
+  .hud .hp .bar i{display:block;height:100%;background:linear-gradient(90deg,#3dffb0,#22e8ff)}
+  .hud .cd{display:flex;gap:6px}
+  .hud .cd .k{padding:4px 8px;border-radius:6px;background:rgba(0,0,0,.45);border:1px solid rgba(34,232,255,.3);min-width:54px;text-align:center;font-size:11px}
+  .hud .cd .k.ready{border-color:var(--green);color:var(--green)}
+  .topright{position:fixed;right:14px;top:14px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;font-size:12px}
+  .toast{position:fixed;left:50%;top:18%;transform:translateX(-50%);padding:10px 16px;border-radius:10px;background:rgba(0,0,0,.6);border:1px solid var(--magenta);color:var(--text);letter-spacing:.18em;text-transform:uppercase;font-size:12px;display:none}
+  .upgrade{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(6px)}
+  .upgrade .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;max-width:780px;width:92%}
+  .ucard{padding:18px;border-radius:14px;cursor:pointer;background:var(--panel-2);border:1px solid rgba(157,92,255,.4);transition:transform .12s,box-shadow .15s}
+  .ucard:hover{transform:translateY(-3px);box-shadow:0 0 40px rgba(157,92,255,.4)}
+  .ucard h4{margin:0 0 6px;font-family:"Orbitron",monospace;color:var(--cyan);letter-spacing:.1em}
+  .ucard p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+  .lobby-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;padding-right:4px}
+  .player-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.35);border-radius:8px;border:1px solid rgba(157,92,255,.2)}
+  .player-row .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);box-shadow:0 0 8px currentColor}
+  .player-row.ready .dot{background:var(--green)}
+  .player-row .name{flex:1;font-weight:700;letter-spacing:.06em}
+  .player-row .hero{font-size:11px;color:var(--cyan);letter-spacing:.12em;text-transform:uppercase}
+  .endscreen .stat{font-size:14px;color:var(--muted)}
+  .endscreen .big{font-size:64px;font-family:"Orbitron",monospace}
+  .leader{max-height:280px;overflow:auto}
+  .leader table{width:100%;border-collapse:collapse;font-size:13px}
+  .leader th,.leader td{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(157,92,255,.15)}
+  .leader th{color:var(--cyan);text-transform:uppercase;letter-spacing:.12em;font-size:11px;position:sticky;top:0;background:var(--panel-2)}
+  a.link{color:var(--cyan);text-decoration:none;border-bottom:1px dashed rgba(34,232,255,.4)}
+  .scanlines::after{content:"";position:fixed;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom, rgba(255,255,255,.025) 0 1px, transparent 1px 3px);mix-blend-mode:overlay;z-index:5}
+  .hidden{display:none!important}
+  .kbd{display:inline-block;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);font-size:11px;letter-spacing:.08em}
+  #touchUI{position:fixed;inset:0;pointer-events:none;z-index:20;display:none;touch-action:none}
+  #touchUI.on{display:block}
+  #touchUI .stick{position:absolute;left:20px;bottom:20px;width:200px;height:200px;pointer-events:auto;}
+  #touchUI .stick .base{position:absolute;left:35px;bottom:35px;width:130px;height:130px;border:2px solid rgba(34,232,255,.55);background:radial-gradient(circle, rgba(34,232,255,.10), rgba(34,232,255,0) 70%);box-shadow:0 0 25px rgba(34,232,255,.35), inset 0 0 25px rgba(157,92,255,.2);opacity:.55;border-radius:50%;}
+  #touchUI .stick .knob{position:absolute;left:70px;bottom:70px;width:60px;height:60px;background:radial-gradient(circle, rgba(255,43,214,.85), rgba(157,92,255,.6));border:2px solid rgba(255,255,255,.7);box-shadow:0 0 18px rgba(255,43,214,.7);opacity:.85;border-radius:50%;z-index:2;}
+  #touchUI .actions{position:absolute;right:14px;bottom:18px;display:flex;flex-direction:column;align-items:flex-end;gap:12px;pointer-events:auto;}
+  #touchUI .actions .row2{display:flex;gap:12px;align-items:flex-end}
+  #touchUI .tbtn{position:relative;width:64px;height:64px;border-radius:50%;border:2px solid rgba(34,232,255,.6);background:radial-gradient(circle at 30% 30%, rgba(34,232,255,.25), rgba(157,92,255,.15) 60%, rgba(0,0,0,.6));color:var(--text);font-family:"Orbitron",monospace;font-size:11px;letter-spacing:.08em;box-shadow:0 0 18px rgba(34,232,255,.35), inset 0 0 12px rgba(157,92,255,.25);user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;}
+  #touchUI .tbtn.big{width:96px;height:96px;font-size:14px;border-color:rgba(255,43,214,.7);background:radial-gradient(circle at 30% 30%, rgba(255,43,214,.35), rgba(157,92,255,.2) 60%, rgba(0,0,0,.6));box-shadow:0 0 26px rgba(255,43,214,.55), inset 0 0 16px rgba(34,232,255,.25);}
+  #touchUI .tbtn.pressed{transform:scale(.92);filter:brightness(1.3)}
+  #touchUI .tbtn .ring{position:absolute;inset:-2px;border-radius:50%;pointer-events:none;background:conic-gradient(rgba(0,0,0,.65) var(--cd,0%), transparent 0);-webkit-mask:radial-gradient(circle, transparent 56%, #000 58%);mask:radial-gradient(circle, transparent 56%, #000 58%);}
+  #touchUI .tbtn.ready .ring{display:none}
+  @media (max-width: 600px){
+    .heroes{grid-template-columns:1fr!important}
+    .hero-card img{aspect-ratio:16/9}
+    .screen{padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(20px,env(safe-area-inset-bottom));align-items:flex-start;justify-content:flex-start}
+    .neon-title{letter-spacing:.12em}
+    .hud{font-size:10px;gap:4px}
+    .btn{padding:14px 16px;min-height:48px;font-size:13px;width:100%}
+    .row{flex-direction:column}
+    .row .btn{width:100%}
+  }
+  .desktop-only{display:inline}
+  @media (hover:none) and (pointer:coarse){ .desktop-only{display:none} }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
+</head>
+<body class="scanlines">
+<canvas id="game"></canvas>
+
+<div class="ui">
+  <div id="menu" class="screen">
+    <div class="inner col" style="align-items:center;gap:24px">
+      <div style="text-align:center">
+        <div class="neon-title" style="font-size:clamp(34px,6vw,72px)">Neural Survival</div>
+        <div class="neon-title" style="font-size:clamp(18px,2.6vw,28px);opacity:.85">Fracture Realm</div>
+        <div style="color:var(--muted);margin-top:6px;font-size:12px;letter-spacing:.2em">v1.0 · neon arena · co-op chaos</div>
+      </div>
+      <div class="panel" style="padding:22px;max-width:520px;width:100%">
+        <div class="col">
+          <label style="font-size:11px;letter-spacing:.18em;color:var(--muted)">CALLSIGN</label>
+          <input id="username" class="input" maxlength="16" placeholder="enter your name" />
+          <div class="row" style="margin-top:6px">
+            <button id="btnSingle" class="btn primary" style="flex:1">Quick Survival</button>
+            <button id="btnMulti" class="btn" style="flex:1">Multiplayer</button>
+          </div>
+          <button id="btnLeader" class="btn ghost">Leaderboard</button>
+        </div>
+      </div>
+      <div style="color:var(--muted);font-size:11px;letter-spacing:.18em;text-align:center">
+        <span class="desktop-only"><span class="kbd">WASD</span> move &nbsp; <span class="kbd">SPACE</span> dash &nbsp; <span class="kbd">MOUSE</span> aim &nbsp; <span class="kbd">LMB</span> attack &nbsp; <span class="kbd">Q</span> ability</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="heroSelect" class="screen hidden">
+    <div class="inner col">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="neon-title" style="font-size:28px">Select Hero</div>
+        <div class="row">
+          <button id="heroBack" class="btn ghost">Back</button>
+          <button id="heroConfirm" class="btn primary">Confirm</button>
+        </div>
+      </div>
+      <div id="heroGrid" class="grid heroes"></div>
+      <div id="heroDesc" class="panel" style="padding:14px;color:var(--muted);font-size:13px;line-height:1.6"></div>
+    </div>
+  </div>
+
+  <div id="mpMenu" class="screen hidden">
+    <div class="inner col" style="max-width:560px;margin:0 auto">
+      <div class="neon-title" style="font-size:28px;text-align:center">Multiplayer</div>
+      <div class="panel" style="padding:18px">
+        <div class="col">
+          <button id="btnQuick" class="btn primary" style="font-size:16px;padding:16px">⚡ Quick Join (Public Room)</button>
+          <div style="text-align:center;color:var(--muted);font-size:11px;letter-spacing:.18em">— OR PLAY WITH FRIENDS —</div>
+          <div class="row">
+            <input id="roomCode" class="input" placeholder="ROOM CODE" maxlength="10" style="flex:1;text-transform:uppercase" />
+            <button id="btnJoin" class="btn">Join</button>
+            <button id="btnCreate" class="btn primary">Create</button>
+          </div>
+          <button id="mpBack" class="btn ghost">Back</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="lobby" class="screen hidden">
+    <div class="inner col" style="max-width:720px;margin:0 auto">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div>
+          <div class="neon-title" style="font-size:24px">Lobby <span id="lobbyCode"></span></div>
+          <div id="lobbyStatus" style="color:var(--muted);font-size:12px;letter-spacing:.18em">WAITING FOR PLAYERS…</div>
+        </div>
+        <div class="row">
+          <button id="lobbyLeave" class="btn ghost">Leave</button>
+          <button id="lobbyReady" class="btn primary">Ready</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:14px">
+        <div id="lobbyList" class="lobby-list"></div>
+      </div>
+      <div id="countdown" style="text-align:center;font-family:Orbitron;font-size:64px;color:var(--magenta);text-shadow:0 0 30px rgba(255,43,214,.7);min-height:80px"></div>
+    </div>
+  </div>
+
+  <div id="leaderScreen" class="screen hidden">
+    <div class="inner col" style="max-width:680px;margin:0 auto">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="neon-title" style="font-size:28px">Leaderboard</div>
+        <button id="leaderBack" class="btn ghost">Back</button>
+      </div>
+      <div class="panel leader" style="padding:10px">
+        <table>
+          <thead><tr><th>#</th><th>Name</th><th>Hero</th><th>Score</th><th>Time</th></tr></thead>
+          <tbody id="leaderBody"><tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">Leaderboard disabled (offline mode).</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div class="hud">
+      <div class="hp"><div id="hpName" style="min-width:80px"></div><div class="bar"><i id="hpBar" style="width:100%"></i></div><div id="hpVal" style="min-width:60px;text-align:right">100</div></div>
+      <div class="cd">
+        <div id="cdDash" class="k ready">DASH</div>
+        <div id="cdAtk" class="k ready">LMB</div>
+        <div id="cdAbi" class="k ready">Q</div>
+      </div>
+      <div class="pill" id="pillTime">00:00</div>
+      <div class="pill" id="pillScore">SCORE 0</div>
+      <div class="pill" id="pillKills">KILLS 0</div>
+      <div class="pill" id="pillFract" style="color:var(--magenta);border-color:var(--magenta)">FRACTURE 0</div>
+    </div>
+    <div class="topright">
+      <div class="pill" id="pillRoom"></div>
+      <div class="pill" id="pillAlive"></div>
+      <button id="btnLeaveGame" class="btn ghost" style="padding:6px 10px;font-size:11px">Leave</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <div id="upgrade" class="upgrade">
+    <div class="col" style="align-items:center;gap:14px">
+      <div class="neon-title" style="font-size:24px">Choose an Upgrade</div>
+      <div id="ucards" class="cards"></div>
+    </div>
+  </div>
+
+  <div id="endScreen" class="screen hidden">
+    <div class="inner col endscreen" style="max-width:560px;margin:0 auto;align-items:center;text-align:center">
+      <div id="endTitle" class="neon-title" style="font-size:36px">You Died</div>
+      <div class="big" id="endScore">0</div>
+      <div class="stat" id="endStats"></div>
+      <div class="row">
+        <button id="btnRestart" class="btn primary">Restart</button>
+        <button id="btnHome" class="btn ghost">Main Menu</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="touchUI">
+  <div class="stick" id="tStick">
+    <div class="base" id="tBase"></div>
+    <div class="knob" id="tKnob"></div>
+  </div>
+  <div class="actions">
+    <div class="tbtn big ready" id="tAttack">FIRE<div class="ring"></div></div>
+    <div class="row2">
+      <div class="tbtn ready" id="tAbility">Q<div class="ring"></div></div>
+      <div class="tbtn ready" id="tDash">DASH<div class="ring"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Browser-compatible Colyseus UMD bundle. MUST load BEFORE game.js -->
+<script>window.global = window; window.Buffer = window.Buffer || { isBuffer: () => false };</script>
+<script src="https://cdn.jsdelivr.net/npm/colyseus.js@0.15.26/dist/colyseus.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
