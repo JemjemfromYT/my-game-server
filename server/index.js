@@ -1,5 +1,5 @@
 // ==============================================================
-// Neural Survival - Colyseus Lobby Server
+// Neural Survival - Colyseus Lobby Server (PATCHED)
 // Run with: node index.js   (from /server folder)
 // Listens on ws://localhost:2567 (room name: "battle_room")
 // ==============================================================
@@ -21,9 +21,10 @@ class LobbyState extends schema.Schema {
   constructor() {
     super();
     this.players = new schema.MapSchema();
-    this.phase = "waiting";   // waiting | starting | in-game
-    this.countdown = 0;       // seconds remaining (0 when not counting)
+    this.phase = "waiting";
+    this.countdown = 0;
     this.hostId = "";
+    this.seed = 0; // shared random seed so all clients spawn the same waves
   }
 }
 schema.defineTypes(LobbyState, {
@@ -31,6 +32,7 @@ schema.defineTypes(LobbyState, {
   phase: "string",
   countdown: "number",
   hostId: "string",
+  seed: "number",
 });
 
 // ---------- Room ----------
@@ -48,10 +50,19 @@ class GameRoom extends colyseus.Room {
       this.evaluateStart();
     });
 
-    // Optional: broadcast in-game position updates between clients
+    // Position / hp updates
     this.onMessage("playerState", (client, payload) => {
       this.broadcast("playerState", { id: client.sessionId, ...payload }, { except: client });
     });
+
+    // Combat events: attack / ability / dash / bullet / hit / death
+    // Generic relay so we don't need a new handler per event type.
+    const combatEvents = ["attack", "ability", "dash", "bullet", "fx", "death", "kill"];
+    for (const ev of combatEvents) {
+      this.onMessage(ev, (client, payload) => {
+        this.broadcast(ev, { id: client.sessionId, ...(payload || {}) }, { except: client });
+      });
+    }
   }
 
   onJoin(client, options) {
@@ -68,7 +79,6 @@ class GameRoom extends colyseus.Room {
   onLeave(client) {
     this.state.players.delete(client.sessionId);
     console.log(`[leave] ${client.sessionId}`);
-    // Promote new host if needed
     if (this.state.hostId === client.sessionId) {
       const next = this.state.players.keys().next().value;
       this.state.hostId = next || "";
@@ -77,7 +87,6 @@ class GameRoom extends colyseus.Room {
         if (np) np.isHost = true;
       }
     }
-    // Cancel countdown if player count drops below 2
     if (this.state.players.size < 2 && this.state.phase === "starting") {
       this.cancelCountdown();
     } else {
@@ -85,11 +94,9 @@ class GameRoom extends colyseus.Room {
     }
   }
 
-  // ---- Countdown / start ----
   evaluateStart() {
     const players = [...this.state.players.values()];
     const allReady = players.length >= 2 && players.every((p) => p.ready);
-
     if (allReady && this.state.phase === "waiting") {
       this.startCountdown();
     } else if (!allReady && this.state.phase === "starting") {
@@ -100,9 +107,7 @@ class GameRoom extends colyseus.Room {
   startCountdown() {
     this.state.phase = "starting";
     this.state.countdown = 3;
-    console.log(`[countdown] starting from 3`);
     this.broadcast("countdown", { n: this.state.countdown });
-
     this.countdownInterval = setInterval(() => {
       this.state.countdown -= 1;
       if (this.state.countdown > 0) {
@@ -112,29 +117,23 @@ class GameRoom extends colyseus.Room {
         this.countdownInterval = null;
         this.state.phase = "in-game";
         this.state.countdown = 0;
-        console.log(`[start] broadcasting startGame`);
-        this.broadcast("startGame", { at: Date.now() });
+        // Shared seed so every client deterministically spawns the same enemies
+        this.state.seed = Math.floor(Math.random() * 0x7fffffff);
+        this.broadcast("startGame", { at: Date.now(), seed: this.state.seed });
       }
     }, 1000);
   }
 
   cancelCountdown() {
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval);
-      this.countdownInterval = null;
-    }
+    if (this.countdownInterval) { clearInterval(this.countdownInterval); this.countdownInterval = null; }
     this.state.phase = "waiting";
     this.state.countdown = 0;
     this.broadcast("countdown", { n: 0, cancelled: true });
-    console.log(`[countdown] cancelled`);
   }
 
-  onDispose() {
-    if (this.countdownInterval) clearInterval(this.countdownInterval);
-  }
+  onDispose() { if (this.countdownInterval) clearInterval(this.countdownInterval); }
 }
 
-// ---------- Boot ----------
 const app = express();
 app.get("/", (_req, res) => res.send("Neural Survival Colyseus server is running."));
 const server = http.createServer(app);

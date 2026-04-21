@@ -1,13 +1,18 @@
 // ==============================================================
-// NEURAL SURVIVAL: FRACTURE REALM — Colyseus multiplayer build
-// Vanilla canvas. Multiplayer powered by ws://localhost:2567
+// NEURAL SURVIVAL: FRACTURE REALM — Colyseus multiplayer build (PATCHED)
+// Fixes:
+//  - 30s upgrade-modal freeze (modal was being kept .hidden)
+//  - Multiplayer: other players' fire / dash / ability / bullets now visible
+//  - Multiplayer: hurt feedback (red vignette + screen shake + sound) so you
+//    notice damage before dying
+//  - Replaced bland time-based upgrades with addictive XP / Level system,
+//    kill-combo multiplier, mini-boss waves, score multiplier
 // ==============================================================
 
 // ---- Colyseus client ----
 const client = new Colyseus.Client("wss://my-game-server-production-aef3.up.railway.app");
 let activeRoom = null;
 
-// ---- Friendly error alerts (kept lightweight) ----
 window.onerror = (msg, url, line) => console.error("GAME ERROR:", msg, url+":"+line);
 window.onunhandledrejection = (event) => console.error("ASYNC ERROR:", event.reason);
 
@@ -32,6 +37,9 @@ const UPGRADES = [
   { id:"weapon",name:"Weapon Tuning", desc:"+25% damage, +10% range.", apply:p=>{p.mods.dmg*=1.25; p.mods.range*=1.10} },
   { id:"firerate", name:"Trigger Discipline", desc:"+25% attack speed.", apply:p=>{p.mods.atkSpd*=1.25} },
   { id:"vamp", name:"Vampiric Edge", desc:"Heal 8% of damage dealt.", apply:p=>{p.mods.lifesteal+=0.08} },
+  { id:"hpmax", name:"Reinforced Frame", desc:"+30 max HP and full heal.", apply:p=>{p.hpMax+=30; p.hp=p.hpMax} },
+  { id:"crit",  name:"Critical Driver", desc:"+15% crit chance for 2x damage.", apply:p=>{p.mods.crit=(p.mods.crit||0)+0.15} },
+  { id:"multishot", name:"Split Shot", desc:"Ranged attacks fire +1 extra projectile.", apply:p=>{p.mods.multishot=(p.mods.multishot||0)+1} },
 ];
 
 // ---------- Globals ----------
@@ -55,7 +63,7 @@ if(window.visualViewport){
 }
 resize();
 
-// ---------- SFX engine ----------
+// ---------- SFX ----------
 const SFX = (() => {
   const BASE = 'sounds/';
   const VOL = { sfx: 0.7, music: 0.35 };
@@ -63,10 +71,10 @@ const SFX = (() => {
   const POOL_SIZE = 4;
   function makePool(src){ const arr=[]; for(let i=0;i<POOL_SIZE;i++){ const a=new Audio(src); a.preload='auto'; a.volume=VOL.sfx; arr.push(a); } return {arr,i:0}; }
   function getPool(key, src){ if(!pools[key]) pools[key]=makePool(src); return pools[key]; }
-  function play(key, src){ try{ const p=getPool(key,src); const a=p.arr[p.i]; p.i=(p.i+1)%p.arr.length; a.currentTime=0; a.volume=VOL.sfx; const pr=a.play(); if(pr&&pr.catch) pr.catch(()=>{});}catch(e){} }
-  function fire(h='james'){play('fire_'+h, `${BASE}fire_${h}.mp3`);}
-  function ability(h='james'){play('q_'+h, `${BASE}q_${h}.mp3`);}
-  function dash(){play('dash', `${BASE}dash.mp3`);}
+  function play(key, src, vol){ try{ const p=getPool(key,src); const a=p.arr[p.i]; p.i=(p.i+1)%p.arr.length; a.currentTime=0; a.volume=(vol??VOL.sfx); const pr=a.play(); if(pr&&pr.catch) pr.catch(()=>{});}catch(e){} }
+  function fire(h='james', vol){play('fire_'+h, `${BASE}fire_${h}.mp3`, vol);}
+  function ability(h='james', vol){play('q_'+h, `${BASE}q_${h}.mp3`, vol);}
+  function dash(vol){play('dash', `${BASE}dash.mp3`, vol);}
   function hit(){play('hit', `${BASE}hit.mp3`);}
   function hurt(){play('hurt', `${BASE}hurt.mp3`);}
   let music=null, currentTrack=null;
@@ -90,11 +98,21 @@ const state = {
   player: null,
   others: new Map(),
   enemies: [], bullets: [], fx: [], pickups: [],
+  remoteBullets: [], // bullets fired by remote players (visual-only on this client)
   arena: { w:2200, h:1500 },
   cam: {x:0,y:0,shake:0},
   time: 0, score: 0, kills: 0, fracture: 0,
-  spawnTimer: 0, upgradeTimer: 30,
+  spawnTimer: 0,
   paused: false, running: false, startedAt: 0,
+  // XP / progression
+  xp: 0, level: 1, xpToNext: 6,
+  pendingUpgrades: 0,
+  // combo
+  combo: 0, comboTimer: 0, comboMul: 1,
+  // boss
+  bossTimer: 60,
+  // damage feedback
+  hurtFlash: 0,
   // MP
   roomCode: null,
   isHost: false,
@@ -124,6 +142,13 @@ function setScene(s){
 function toast(msg, ms=1600){
   const t=$('#toast'); t.textContent=msg; t.style.display='block';
   clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.display='none', ms);
+}
+function showWaveBanner(text){
+  const el = document.getElementById('waveBanner'); if(!el) return;
+  el.textContent = text; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
+}
+function flashDamage(){
+  state.hurtFlash = 0.45;
 }
 
 function renderHeroGrid(){
@@ -198,12 +223,14 @@ function makePlayer(heroId, x, y, isLocal=true, id=null){
     hp: h.hp, hpMax: h.hp, shield:0, angle:0,
     dashCd:0, atkCd:0, abiCd:0, dashing:0,
     score:0, kills:0, alive:true,
-    mods: { speed:1, cdr:1, dmg:1, range:1, atkSpd:1, shieldMax:0, aura:0, slow:0, regen:0, lifesteal:0 },
+    mods: { speed:1, cdr:1, dmg:1, range:1, atkSpd:1, shieldMax:0, aura:0, slow:0, regen:0, lifesteal:0, crit:0, multishot:0 },
     abiState: 0,
+    // visual flags for remote players
+    fxFlash: 0, abiFlash: 0,
   };
 }
 
-// ---------- Enemies / bullets / fx (unchanged) ----------
+// ---------- Enemies / bullets / fx ----------
 function spawnEnemy(){
   const a=state.arena, side=Math.floor(Math.random()*4); let x,y;
   if(side===0){x=Math.random()*a.w;y=-20;} else if(side===1){x=a.w+20;y=Math.random()*a.h;}
@@ -211,7 +238,15 @@ function spawnEnemy(){
   const tier=Math.min(5,1+Math.floor(state.time/45));
   const type = state.fracture>=2 && Math.random()<0.25 ? 'phantom' : (Math.random()<0.25 ? 'brute' : 'drone');
   const base = type==='brute' ? {hp:90,sp:70,r:18,dmg:18,col:'#ff3d6a'} : type==='phantom'?{hp:55,sp:130,r:13,dmg:14,col:'#9d5cff'} : {hp:35,sp:100,r:11,dmg:10,col:'#22e8ff'};
-  state.enemies.push({type,x,y,hp:base.hp*(1+tier*0.25),hpMax:base.hp*(1+tier*0.25),sp:base.sp*(1+tier*0.08),r:base.r,dmg:base.dmg*(1+tier*0.15),col:base.col,cd:0,jitter:Math.random()*Math.PI*2});
+  state.enemies.push({type,x,y,hp:base.hp*(1+tier*0.25),hpMax:base.hp*(1+tier*0.25),sp:base.sp*(1+tier*0.08),r:base.r,dmg:base.dmg*(1+tier*0.15),col:base.col,cd:0,jitter:Math.random()*Math.PI*2,xp:type==='brute'?3:type==='phantom'?2:1});
+}
+function spawnBoss(){
+  const a=state.arena;
+  const x = a.w/2, y = -40;
+  const tier = Math.min(5,1+Math.floor(state.time/45));
+  state.enemies.push({type:'boss',x,y,hp:600*(1+tier*0.4),hpMax:600*(1+tier*0.4),sp:60+tier*4,r:34,dmg:30+tier*4,col:'#ff2bd6',cd:0,jitter:0,xp:25,boss:true});
+  showWaveBanner(`⚠ MINI-BOSS INCOMING ⚠`);
+  shake(14);
 }
 function spawnBullet(o){ state.bullets.push(Object.assign({life:1.2,radius:5,piercing:0,trail:[]}, o)); }
 function particles(x,y,color,count=12,spd=180,life=0.5,radius=2){
@@ -223,34 +258,46 @@ function shake(amt){ state.cam.shake = Math.min(20, state.cam.shake + amt); }
 function startGame(mode='single'){
   state.mode = mode;
   state.enemies.length=0; state.bullets.length=0; state.fx.length=0; state.pickups.length=0;
-  state.others.clear();
+  state.remoteBullets.length=0;
+  if(mode!=='multi') state.others.clear();
   state.time=0; state.score=0; state.kills=0; state.fracture=0;
-  state.spawnTimer=0; state.upgradeTimer=30; state.paused=false; state.running=true;
+  state.spawnTimer=0; state.paused=false; state.running=true;
+  state.xp=0; state.level=1; state.xpToNext=6; state.pendingUpgrades=0;
+  state.combo=0; state.comboTimer=0; state.comboMul=1;
+  state.bossTimer=60; state.hurtFlash=0;
   state.cam.shake=0;
   const a = state.arena;
   state.player = makePlayer(state.hero, a.w/2, a.h/2, true);
   state.player.name = state.username || 'Operator';
   state.startedAt = performance.now();
   setScene('game');
-  show('upgrade', false);
-  $('#upgrade').style.display='none';
+  hideUpgrade();
   $('#hpName').textContent = HEROES[state.hero].name.toUpperCase();
   $('#pillRoom').textContent = state.mode==='multi' ? `ROOM ${state.roomCode}` : 'SOLO RUN';
   $('#pillAlive').textContent = '';
+  showWaveBanner('SURVIVE');
 }
 
 function endGame(victory=false){
-  state.running=false; setScene('end');
+  state.running=false; setScene('endScreen');
   $('#endTitle').textContent = victory ? 'Victory' : 'You Died';
   $('#endScore').textContent = state.score|0;
   const t=state.time|0;
-  $('#endStats').innerHTML = `Survived ${Math.floor(t/60)}m ${t%60}s · ${state.kills} kills · Fracture stage ${state.fracture}`;
+  $('#endStats').innerHTML = `Survived ${Math.floor(t/60)}m ${t%60}s · ${state.kills} kills · LV ${state.level} · Fracture ${state.fracture}`;
 }
 
 let lastT = performance.now();
 function loop(now){
   const dt = Math.min(0.05, (now-lastT)/1000); lastT=now;
   if(state.scene==='game' && state.running && !state.paused) update(dt);
+  // Remote bullets/fx tick even when local paused so MP visuals stay smooth
+  if(state.scene==='game') tickRemote(dt);
+  // Hurt flash decay
+  if(state.hurtFlash>0){
+    state.hurtFlash = Math.max(0, state.hurtFlash - dt*2);
+    const df = document.getElementById('damageFlash');
+    if(df) df.classList.toggle('on', state.hurtFlash>0.05);
+  }
   render();
   requestAnimationFrame(loop);
 }
@@ -259,12 +306,25 @@ requestAnimationFrame(loop);
 function update(dt){
   state.time += dt;
   const stage = Math.floor(state.time/30);
-  if(stage>state.fracture){ state.fracture=stage; toast(`FRACTURE STAGE ${stage} — REALITY DESTABILIZING`, 2200); shake(8); }
+  if(stage>state.fracture){ state.fracture=stage; toast(`FRACTURE STAGE ${stage} — REALITY DESTABILIZING`, 2200); shake(8); showWaveBanner(`FRACTURE ${stage}`); }
   state.spawnTimer -= dt;
   const targetSpawn = Math.max(0.25, 1.4 - state.time*0.012 - state.fracture*0.08);
   if(state.spawnTimer<=0){ state.spawnTimer=targetSpawn; const n=1+Math.floor(state.time/40); for(let i=0;i<n;i++) spawnEnemy(); }
-  state.upgradeTimer -= dt;
-  if(state.upgradeTimer<=0){ state.upgradeTimer=35+Math.random()*20; showUpgradePicker(); }
+
+  // Boss timer (every 60s)
+  state.bossTimer -= dt;
+  if(state.bossTimer<=0){ state.bossTimer=60; spawnBoss(); }
+
+  // Combo decay
+  if(state.combo>0){
+    state.comboTimer -= dt;
+    if(state.comboTimer<=0){ state.combo=0; state.comboMul=1; updateComboUI(); }
+  }
+
+  // Pending level-up upgrades — show modal one at a time
+  if(state.pendingUpgrades>0 && !state.paused && document.getElementById('upgrade').style.display !== 'flex'){
+    showUpgradePicker();
+  }
 
   updatePlayer(state.player, dt, true);
   updateEnemies(dt); updateBullets(dt); updateFx(dt);
@@ -283,6 +343,8 @@ function update(dt){
   $('#pillScore').textContent = `SCORE ${state.score}`;
   $('#pillKills').textContent = `KILLS ${state.kills}`;
   $('#pillFract').textContent = `FRACTURE ${state.fracture}`;
+  $('#lvlVal').textContent = `LV ${state.level}`;
+  $('#xpBar').style.width = Math.min(100, (state.xp/state.xpToNext)*100)+'%';
   $('#cdDash').className='k'+(p.dashCd<=0?' ready':''); $('#cdDash').textContent = p.dashCd<=0?'DASH':'DASH '+p.dashCd.toFixed(1);
   $('#cdAtk').className ='k'+(p.atkCd<=0?' ready':'');  $('#cdAtk').textContent  = p.atkCd<=0?'LMB':'LMB '+p.atkCd.toFixed(1);
   $('#cdAbi').className ='k'+(p.abiCd<=0?' ready':'');  $('#cdAbi').textContent  = p.abiCd<=0?'Q':'Q '+p.abiCd.toFixed(1);
@@ -293,7 +355,26 @@ function update(dt){
     broadcastTick(dt);
   }
 
-  if(p.hp<=0 && p.alive){ p.alive=false; particles(p.x,p.y,'#ff3d6a',40,260,0.9,3); shake(14); setTimeout(()=>endGame(false), 400); }
+  if(p.hp<=0 && p.alive){
+    p.alive=false;
+    particles(p.x,p.y,'#ff3d6a',40,260,0.9,3); shake(14);
+    if(activeRoom){ try{ activeRoom.send('death', {x:p.x,y:p.y}); }catch(e){} }
+    setTimeout(()=>endGame(false), 400);
+  }
+}
+
+function tickRemote(dt){
+  // advance remote bullets visually
+  for(const b of state.remoteBullets){
+    b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt;
+    b.trail = b.trail || []; b.trail.push({x:b.x,y:b.y}); if(b.trail.length>8) b.trail.shift();
+  }
+  state.remoteBullets = state.remoteBullets.filter(b=>b.life>0);
+  for(const o of state.others.values()){
+    if(o.dashing>0) o.dashing = Math.max(0, o.dashing - dt);
+    if(o.fxFlash>0) o.fxFlash = Math.max(0, o.fxFlash - dt);
+    if(o.abiFlash>0) o.abiFlash = Math.max(0, o.abiFlash - dt);
+  }
 }
 
 function updatePlayer(p, dt, isLocal){
@@ -318,7 +399,11 @@ function updatePlayer(p, dt, isLocal){
     if(!aimed){ const wx=mouse.x+state.cam.x, wy=mouse.y+state.cam.y; p.angle=Math.atan2(wy-p.y,wx-p.x); }
   }
   p.dashCd=Math.max(0,p.dashCd-dt); p.atkCd=Math.max(0,p.atkCd-dt); p.abiCd=Math.max(0,p.abiCd-dt); p.dashing=Math.max(0,p.dashing-dt);
-  if(isLocal && (keys[' ']||touch.dashEdge) && p.dashCd<=0){ p.dashCd=2*p.mods.cdr; p.dashing=0.18; SFX.dash(); particles(p.x,p.y,h.color,16,220,0.4,2); }
+  if(isLocal && (keys[' ']||touch.dashEdge) && p.dashCd<=0){
+    p.dashCd=2*p.mods.cdr; p.dashing=0.18; SFX.dash();
+    particles(p.x,p.y,h.color,16,220,0.4,2);
+    if(activeRoom){ try{ activeRoom.send('dash', {x:p.x,y:p.y,angle:+p.angle.toFixed(2)}); }catch(e){} }
+  }
   touch.dashEdge=false;
   if(isLocal && (mouse.down||touch.attack) && p.atkCd<=0) doAttack(p);
   if(isLocal && (keys['q']||touch.abiEdge) && p.abiCd<=0) doAbility(p);
@@ -328,26 +413,40 @@ function updatePlayer(p, dt, isLocal){
   if(p.mods.aura>0){ for(const e of state.enemies){ const dx=e.x-p.x,dy=e.y-p.y,d2=dx*dx+dy*dy; if(d2<130*130){ e.hp-=p.mods.aura*dt; if(Math.random()<0.2) particles(e.x,e.y,'#ff8a3d',1,40,0.3,2); } } }
 }
 
+function rollCrit(p, dmg){
+  if(p && p.mods && p.mods.crit && Math.random() < p.mods.crit) return dmg*2;
+  return dmg;
+}
+
 function doAttack(p){
   const h=HEROES[p.heroId]; p.atkCd=h.atkCd/p.mods.atkSpd; SFX.fire(p.heroId);
   const dmg=h.dmg*p.mods.dmg, range=h.range*p.mods.range, ang=p.angle;
+  // Send attack event to remote clients (they'll render the visual)
+  if(activeRoom){ try{ activeRoom.send('attack', {hero:p.heroId, x:p.x|0, y:p.y|0, angle:+ang.toFixed(2), range, dmg}); }catch(e){} }
   if(p.heroId==='james'){
-    let hit=0; for(const e of state.enemies){ const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy); if(d<range){ const a=Math.atan2(dy,dx); let da=Math.atan2(Math.sin(a-ang),Math.cos(a-ang)); if(Math.abs(da)<1.0){ damageEnemy(e,dmg,p); hit++; } } }
+    let hit=0; for(const e of state.enemies){ const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy); if(d<range){ const a=Math.atan2(dy,dx); let da=Math.atan2(Math.sin(a-ang),Math.cos(a-ang)); if(Math.abs(da)<1.0){ damageEnemy(e,rollCrit(p,dmg),p); hit++; } } }
     for(let i=0;i<10;i++){ const t=i/10, a=ang-1+t*2; state.fx.push({x:p.x+Math.cos(a)*range*0.7,y:p.y+Math.sin(a)*range*0.7,vx:0,vy:0,life:0.18,life0:0.18,color:h.color,r:4}); }
     if(hit>0) shake(3);
   } else if(p.heroId==='jeff'){
-    let hit=0; for(const e of state.enemies){ const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy); if(d<range){ const a=Math.atan2(dy,dx); let da=Math.atan2(Math.sin(a-ang),Math.cos(a-ang)); if(Math.abs(da)<0.7){ damageEnemy(e,dmg,p); hit++; } } }
+    let hit=0; for(const e of state.enemies){ const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy); if(d<range){ const a=Math.atan2(dy,dx); let da=Math.atan2(Math.sin(a-ang),Math.cos(a-ang)); if(Math.abs(da)<0.7){ damageEnemy(e,rollCrit(p,dmg),p); hit++; } } }
     for(let i=0;i<6;i++) state.fx.push({x:p.x+Math.cos(ang)*i*8,y:p.y+Math.sin(ang)*i*8,vx:0,vy:0,life:0.15,life0:0.15,color:h.color,r:3});
     if(hit>0) shake(2);
   } else {
     const speed = p.heroId==='joross'?720:(p.heroId==='jake'?520:600);
     const radius = p.heroId==='jake'?9:(p.heroId==='jeb'?7:5);
-    spawnBullet({x:p.x+Math.cos(ang)*18,y:p.y+Math.sin(ang)*18,vx:Math.cos(ang)*speed,vy:Math.sin(ang)*speed,dmg,owner:p.id,color:h.color,radius,life:range/speed*1.05,piercing:p.heroId==='jake'?1:0,heal:p.heroId==='jeb'?dmg*0.4:0});
+    const ms = (p.mods.multishot||0);
+    for(let s=-ms; s<=ms; s++){
+      const a = ang + s*0.12;
+      spawnBullet({x:p.x+Math.cos(a)*18,y:p.y+Math.sin(a)*18,vx:Math.cos(a)*speed,vy:Math.sin(a)*speed,dmg:rollCrit(p,dmg),owner:p.id,color:h.color,radius,life:range/speed*1.05,piercing:p.heroId==='jake'?1:0,heal:p.heroId==='jeb'?dmg*0.4:0});
+    }
+    // Broadcast bullet spawn so remote clients render the projectile
+    if(activeRoom){ try{ activeRoom.send('bullet', {hero:p.heroId, x:p.x, y:p.y, angle:+ang.toFixed(2), speed, radius, life:range/speed*1.05, color:h.color, ms}); }catch(e){} }
   }
 }
 
 function doAbility(p){
   const h=HEROES[p.heroId]; p.abiCd=h.abiCd*p.mods.cdr; SFX.ability(p.heroId);
+  if(activeRoom){ try{ activeRoom.send('ability', {hero:p.heroId, x:p.x|0, y:p.y|0, angle:+p.angle.toFixed(2)}); }catch(e){} }
   if(p.heroId==='james'){ for(const e of state.enemies){ if(Math.hypot(e.x-p.x,e.y-p.y)<140) damageEnemy(e,h.dmg*1.4*p.mods.dmg,p); } particles(p.x,p.y,h.color,40,300,0.6,3); shake(8); }
   else if(p.heroId==='jake'){ const ring=24; for(let i=0;i<ring;i++){ const a=(i/ring)*Math.PI*2; spawnBullet({x:p.x,y:p.y,vx:Math.cos(a)*420,vy:Math.sin(a)*420,dmg:h.dmg*1.2*p.mods.dmg,owner:p.id,color:h.color,radius:8,life:0.9,piercing:2}); } particles(p.x,p.y,h.color,40,260,0.7,3); shake(6); }
   else if(p.heroId==='joross'){ const orig=p.mods.atkSpd; p.mods.atkSpd*=3; toast('SUPPRESS!'); setTimeout(()=>{p.mods.atkSpd=orig;},3000); }
@@ -355,7 +454,86 @@ function doAbility(p){
   else if(p.heroId==='jeff'){ const dx=Math.cos(p.angle)*180, dy=Math.sin(p.angle)*180; for(const e of state.enemies){ const ax=e.x-p.x,ay=e.y-p.y; const t=Math.max(0,Math.min(1,(ax*dx+ay*dy)/(dx*dx+dy*dy))); const px=p.x+dx*t, py=p.y+dy*t; if(Math.hypot(e.x-px,e.y-py)<40) damageEnemy(e,h.dmg*1.8*p.mods.dmg,p); } particles(p.x,p.y,h.color,18,260,0.4,3); p.x+=dx; p.y+=dy; p.x=Math.max(20,Math.min(state.arena.w-20,p.x)); p.y=Math.max(20,Math.min(state.arena.h-20,p.y)); particles(p.x,p.y,h.color,18,260,0.4,3); shake(8); }
 }
 
-function damageEnemy(e,dmg,p){ if(e.hp<=0) return; e.hp-=dmg; if(p&&p.heroId) SFX.hit(); if(p&&p.mods.lifesteal>0) p.hp=Math.min(p.hpMax,p.hp+dmg*p.mods.lifesteal); particles(e.x,e.y,e.col,4,140,0.3,2); if(e.hp<=0){ state.kills++; if(p) p.kills++; particles(e.x,e.y,e.col,18,240,0.7,3); shake(2); e.dead=true; } }
+// Render the same visuals locally when a remote player attacks (no real damage)
+function playRemoteAttack(o, msg){
+  const h = HEROES[msg.hero] || HEROES.james;
+  const ang = msg.angle||0; const range = msg.range||h.range;
+  if(msg.hero==='james'){
+    for(let i=0;i<10;i++){ const t=i/10, a=ang-1+t*2; state.fx.push({x:o.x+Math.cos(a)*range*0.7,y:o.y+Math.sin(a)*range*0.7,vx:0,vy:0,life:0.18,life0:0.18,color:h.color,r:4}); }
+  } else if(msg.hero==='jeff'){
+    for(let i=0;i<6;i++) state.fx.push({x:o.x+Math.cos(ang)*i*8,y:o.y+Math.sin(ang)*i*8,vx:0,vy:0,life:0.15,life0:0.15,color:h.color,r:3});
+  }
+  o.fxFlash = 0.12;
+  SFX.fire(msg.hero, 0.35);
+}
+function playRemoteAbility(o, msg){
+  const h = HEROES[msg.hero] || HEROES.james;
+  particles(o.x, o.y, h.color, 30, 260, 0.6, 3);
+  o.abiFlash = 0.4;
+  SFX.ability(msg.hero, 0.45);
+}
+function playRemoteDash(o, msg){
+  const h = HEROES[o.heroId] || HEROES.james;
+  o.dashing = 0.18;
+  particles(msg.x||o.x, msg.y||o.y, h.color, 12, 200, 0.4, 2);
+  SFX.dash(0.4);
+}
+function spawnRemoteBullet(o, msg){
+  const ang = msg.angle||0;
+  const ms = msg.ms||0;
+  for(let s=-ms; s<=ms; s++){
+    const a = ang + s*0.12;
+    state.remoteBullets.push({
+      x: msg.x, y: msg.y,
+      vx: Math.cos(a)*(msg.speed||500), vy: Math.sin(a)*(msg.speed||500),
+      life: msg.life||1, color: msg.color||'#fff', radius: msg.radius||5, trail: [],
+    });
+  }
+}
+
+function damageEnemy(e,dmg,p){
+  if(e.hp<=0) return;
+  e.hp-=dmg;
+  if(p&&p.heroId) SFX.hit();
+  if(p&&p.mods&&p.mods.lifesteal>0) p.hp=Math.min(p.hpMax,p.hp+dmg*p.mods.lifesteal);
+  particles(e.x,e.y,e.col,4,140,0.3,2);
+  if(e.hp<=0){
+    state.kills++; if(p) p.kills++;
+    particles(e.x,e.y,e.col,18,240,0.7,3); shake(2); e.dead=true;
+    // XP + combo
+    const xpGain = e.xp||1;
+    addXP(xpGain);
+    bumpCombo();
+    if(e.boss) showWaveBanner('BOSS DOWN');
+    if(activeRoom){ try{ activeRoom.send('kill', {x:e.x|0,y:e.y|0,col:e.col}); }catch(e){} }
+  }
+}
+
+function addXP(n){
+  state.xp += n * state.comboMul;
+  while(state.xp >= state.xpToNext){
+    state.xp -= state.xpToNext;
+    state.level++;
+    state.xpToNext = Math.floor(state.xpToNext * 1.35 + 2);
+    state.pendingUpgrades++;
+    showWaveBanner(`LEVEL ${state.level}`);
+    shake(4);
+  }
+}
+
+function bumpCombo(){
+  state.combo++;
+  state.comboTimer = 4; // 4s window
+  state.comboMul = state.combo>=30?4 : state.combo>=15?3 : state.combo>=6?2 : 1;
+  updateComboUI();
+}
+function updateComboUI(){
+  const el = document.getElementById('combo'); if(!el) return;
+  if(state.combo<3){ el.classList.remove('on'); return; }
+  el.classList.add('on');
+  document.getElementById('comboX').textContent = `x${state.comboMul}`;
+  document.getElementById('comboTxt').textContent = `${state.combo} COMBO`;
+}
 
 function updateEnemies(dt){
   const p=state.player;
@@ -372,7 +550,17 @@ function updateEnemies(dt){
     if(e.type==='phantom'){ e.jitter+=dt*4; const px=-dy/d, py=dx/d; e.x+=(dx/d*sp+px*Math.sin(e.jitter)*sp*0.6)*dt; e.y+=(dy/d*sp+py*Math.sin(e.jitter)*sp*0.6)*dt; }
     else { e.x+=dx/d*sp*dt; e.y+=dy/d*sp*dt; }
     e.cd=Math.max(0,e.cd-dt);
-    if(d<e.r+18 && e.cd<=0){ const dmgIn=e.dmg; let rem=dmgIn; if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; } p.hp-=rem; SFX.hurt(); e.cd=0.6; shake(4); particles(p.x,p.y,'#ff3d6a',8,180,0.4,2); }
+    // Damage applied to LOCAL player only when collision
+    const dpx = p.x-e.x, dpy = p.y-e.y, dp = Math.hypot(dpx,dpy);
+    if(dp<e.r+18 && e.cd<=0){
+      const dmgIn=e.dmg; let rem=dmgIn;
+      if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; }
+      p.hp-=rem; SFX.hurt(); e.cd=0.6; shake(6);
+      particles(p.x,p.y,'#ff3d6a',10,200,0.45,2);
+      flashDamage();
+      // Reset combo on heavy hit
+      if(rem>15){ state.combo=0; state.comboMul=1; updateComboUI(); }
+    }
   }
   state.enemies = state.enemies.filter(e=>!e.dead);
 }
@@ -407,16 +595,23 @@ function render(){
   ctx.strokeRect(0,0,state.arena.w,state.arena.h); ctx.shadowBlur=0;
   for(const f of state.fx){ const a=Math.max(0,f.life/f.life0); if(f.ring){ ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2); ctx.strokeStyle=withAlpha(f.color,0.3*a); ctx.lineWidth=4; ctx.shadowColor=f.color; ctx.shadowBlur=30; ctx.stroke(); ctx.shadowBlur=0; } else { ctx.fillStyle=withAlpha(f.color,a); ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2); ctx.fill(); } }
   for(const e of state.enemies){
-    ctx.save(); ctx.translate(e.x,e.y); ctx.shadowColor=e.col; ctx.shadowBlur=16; ctx.fillStyle=e.col;
+    ctx.save(); ctx.translate(e.x,e.y); ctx.shadowColor=e.col; ctx.shadowBlur=e.boss?28:16; ctx.fillStyle=e.col;
     if(e.type==='brute') ctx.fillRect(-e.r,-e.r,e.r*2,e.r*2);
     else if(e.type==='phantom'){ ctx.beginPath(); ctx.moveTo(0,-e.r); ctx.lineTo(e.r,0); ctx.lineTo(0,e.r); ctx.lineTo(-e.r,0); ctx.closePath(); ctx.fill(); }
+    else if(e.type==='boss'){ ctx.beginPath(); for(let i=0;i<6;i++){ const a=i/6*Math.PI*2; ctx.lineTo(Math.cos(a)*e.r, Math.sin(a)*e.r); } ctx.closePath(); ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); }
     else { ctx.beginPath(); ctx.arc(0,0,e.r,0,Math.PI*2); ctx.fill(); }
     ctx.restore();
-    if(e.hp<e.hpMax){ ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(e.x-e.r,e.y-e.r-8,e.r*2,3); ctx.fillStyle=e.col; ctx.fillRect(e.x-e.r,e.y-e.r-8,(e.r*2)*Math.max(0,e.hp/e.hpMax),3); }
+    if(e.hp<e.hpMax){ const w = e.boss?80:e.r*2; ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(e.x-w/2,e.y-e.r-8,w,e.boss?5:3); ctx.fillStyle=e.col; ctx.fillRect(e.x-w/2,e.y-e.r-8,w*Math.max(0,e.hp/e.hpMax),e.boss?5:3); }
   }
+  // Local bullets
   for(const b of state.bullets){
     for(let i=0;i<b.trail.length;i++){ const t=i/b.trail.length; ctx.fillStyle=withAlpha(b.color,0.15+0.5*t); ctx.beginPath(); ctx.arc(b.trail[i].x,b.trail[i].y,b.radius*(0.5+t*0.6),0,Math.PI*2); ctx.fill(); }
     ctx.shadowColor=b.color; ctx.shadowBlur=18; ctx.fillStyle=b.color; ctx.beginPath(); ctx.arc(b.x,b.y,b.radius,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
+  }
+  // Remote bullets (visual only)
+  for(const b of state.remoteBullets){
+    for(let i=0;i<(b.trail||[]).length;i++){ const t=i/b.trail.length; ctx.fillStyle=withAlpha(b.color,0.15+0.5*t); ctx.beginPath(); ctx.arc(b.trail[i].x,b.trail[i].y,b.radius*(0.5+t*0.6),0,Math.PI*2); ctx.fill(); }
+    ctx.shadowColor=b.color; ctx.shadowBlur=14; ctx.fillStyle=b.color; ctx.beginPath(); ctx.arc(b.x,b.y,b.radius,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
   }
   if(state.mode==='multi'){ for(const o of state.others.values()) drawPlayer(o,false); }
   drawPlayer(state.player, true);
@@ -426,12 +621,16 @@ function render(){
 function drawPlayer(p, local){
   if(!p) return;
   const h = HEROES[p.heroId]; if(!h) return;
-  if(p.dashing>0){ for(let i=0;i<6;i++){ ctx.fillStyle=withAlpha(h.color,0.06+i*0.02); ctx.beginPath(); ctx.arc(p.x-Math.cos(p.angle)*i*4,p.y-Math.sin(p.angle)*i*4,16,0,Math.PI*2); ctx.fill(); } }
-  ctx.save(); ctx.translate(p.x,p.y); ctx.shadowColor=h.color; ctx.shadowBlur=22;
+  if(p.dashing>0){ for(let i=0;i<6;i++){ ctx.fillStyle=withAlpha(h.color,0.06+i*0.02); ctx.beginPath(); ctx.arc(p.x-Math.cos(p.angle||0)*i*4,p.y-Math.sin(p.angle||0)*i*4,16,0,Math.PI*2); ctx.fill(); } }
+  if(p.abiFlash>0){
+    ctx.beginPath(); ctx.arc(p.x,p.y,30+ (1-p.abiFlash/0.4)*60, 0, Math.PI*2);
+    ctx.strokeStyle = withAlpha(h.color, p.abiFlash); ctx.lineWidth = 3; ctx.shadowColor=h.color; ctx.shadowBlur=24; ctx.stroke(); ctx.shadowBlur=0;
+  }
+  ctx.save(); ctx.translate(p.x,p.y); ctx.shadowColor=h.color; ctx.shadowBlur= p.fxFlash>0 ? 32 : 22;
   ctx.fillStyle = local ? h.color : '#ffffff';
   ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
-  ctx.rotate(p.angle); ctx.strokeStyle=h.color; ctx.lineWidth=3; ctx.shadowColor=h.color; ctx.shadowBlur=14;
-  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(28,0); ctx.stroke(); ctx.shadowBlur=0;
+  ctx.rotate(p.angle||0); ctx.strokeStyle=h.color; ctx.lineWidth=3; ctx.shadowColor=h.color; ctx.shadowBlur=14;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(28 + (p.fxFlash>0?8:0),0); ctx.stroke(); ctx.shadowBlur=0;
   ctx.restore();
   if(p.shield>0){ ctx.strokeStyle=withAlpha('#22e8ff',0.7); ctx.lineWidth=2; ctx.beginPath(); ctx.arc(p.x,p.y,20,0,Math.PI*2); ctx.stroke(); }
   ctx.fillStyle='#fff'; ctx.font='12px ui-monospace,monospace'; ctx.textAlign='center';
@@ -452,12 +651,37 @@ function drawBackground(){
 function withAlpha(hex,a){ if(!hex) return `rgba(255,255,255,${a})`; const m=hex.replace('#',''); const r=parseInt(m.slice(0,2),16),g=parseInt(m.slice(2,4),16),b=parseInt(m.slice(4,6),16); return `rgba(${r},${g},${b},${a})`; }
 
 // ---------- Upgrade picker ----------
+function hideUpgrade(){
+  const u = document.getElementById('upgrade');
+  u.classList.remove('show');
+  u.classList.add('hidden') && false; // no-op safety
+  u.classList.remove('hidden');
+  u.style.display = 'none';
+}
 function showUpgradePicker(){
   state.paused=true;
   const choices = pickN(UPGRADES, 3);
   const wrap = $('#ucards'); wrap.innerHTML='';
-  choices.forEach(u=>{ const el=document.createElement('div'); el.className='ucard'; el.innerHTML=`<h4>${u.name}</h4><p>${u.desc}</p>`; el.onclick=()=>{ u.apply(state.player); $('#upgrade').style.display='none'; state.paused=false; toast(`Acquired: ${u.name}`); }; wrap.appendChild(el); });
-  $('#upgrade').style.display='flex';
+  const titleEl = document.getElementById('upgradeTitle');
+  if(titleEl) titleEl.textContent = `LEVEL ${state.level} — Choose an Upgrade`;
+  choices.forEach(u=>{
+    const el=document.createElement('div'); el.className='ucard';
+    el.innerHTML=`<h4>${u.name}</h4><p>${u.desc}</p>`;
+    el.onclick=()=>{
+      u.apply(state.player);
+      state.pendingUpgrades = Math.max(0, state.pendingUpgrades - 1);
+      hideUpgrade();
+      toast(`Acquired: ${u.name}`);
+      // If more pending, immediately re-open
+      if(state.pendingUpgrades>0){ setTimeout(showUpgradePicker, 250); }
+      else { state.paused=false; }
+    };
+    wrap.appendChild(el);
+  });
+  const u = document.getElementById('upgrade');
+  u.classList.remove('hidden');
+  u.classList.add('show');
+  u.style.display='flex';
 }
 function pickN(arr,n){ const a=arr.slice(),out=[]; while(out.length<n && a.length){ out.push(a.splice(Math.floor(Math.random()*a.length),1)[0]); } return out; }
 
@@ -487,14 +711,47 @@ function renderLobby(){
   }
 }
 
+function bindCommonRoomHandlers(){
+  if(!activeRoom) return;
+  activeRoom.onMessage('playerState', (msg) => {
+    if(!msg || !msg.id || msg.id === state.mySessionId) return;
+    const existing = state.others.get(msg.id) || { fxFlash:0, abiFlash:0, dashing:0 };
+    state.others.set(msg.id, { ...existing, ...msg });
+  });
+  activeRoom.onMessage('attack', (msg)=>{
+    if(!msg || msg.id === state.mySessionId) return;
+    const o = state.others.get(msg.id); if(!o) return;
+    playRemoteAttack(o, msg);
+  });
+  activeRoom.onMessage('ability', (msg)=>{
+    if(!msg || msg.id === state.mySessionId) return;
+    const o = state.others.get(msg.id); if(!o) return;
+    playRemoteAbility(o, msg);
+  });
+  activeRoom.onMessage('dash', (msg)=>{
+    if(!msg || msg.id === state.mySessionId) return;
+    const o = state.others.get(msg.id); if(!o) return;
+    playRemoteDash(o, msg);
+  });
+  activeRoom.onMessage('bullet', (msg)=>{
+    if(!msg || msg.id === state.mySessionId) return;
+    const o = state.others.get(msg.id); if(!o) return;
+    spawnRemoteBullet(o, msg);
+  });
+  activeRoom.onMessage('kill', (msg)=>{
+    if(!msg || msg.id === state.mySessionId) return;
+    particles(msg.x, msg.y, msg.col||'#fff', 12, 220, 0.5, 2);
+  });
+  activeRoom.onMessage('death', (msg)=>{
+    if(!msg || msg.id === state.mySessionId) return;
+    const o = state.others.get(msg.id);
+    if(o){ o.alive=false; particles(o.x, o.y, '#ff3d6a', 30, 240, 0.8, 3); toast(`${o.name||'Player'} died`); }
+  });
+}
+
 async function joinRoom(roomName, options = {}){
   try{
-    const opts = {
-      name: state.username || 'Operator',
-      heroId: state.hero,
-      ...options,
-    };
-    console.log('[net] joining', roomName, opts);
+    const opts = { name: state.username || 'Operator', heroId: state.hero, ...options };
     if(activeRoom){ try{ await activeRoom.leave(); }catch(e){} activeRoom=null; }
     activeRoom = await client.joinOrCreate(roomName, opts);
     state.roomCode = activeRoom.id;
@@ -506,7 +763,6 @@ async function joinRoom(roomName, options = {}){
     $('#lobbyCode').textContent = '· ' + (roomName === 'battle_room' ? activeRoom.id : roomName);
     setCountdownText('');
 
-    // Sync players from state
     const refresh = () => {
       const m = new Map();
       activeRoom.state.players.forEach((p, id) => {
@@ -518,46 +774,26 @@ async function joinRoom(roomName, options = {}){
       state.lobby.countdown = activeRoom.state.countdown || 0;
       renderLobby();
     };
-
-    activeRoom.onStateChange(refresh);
-    refresh();
+    activeRoom.onStateChange(refresh); refresh();
 
     activeRoom.onMessage('countdown', (msg) => {
-      console.log('[net] countdown', msg);
       state.lobby.countdown = msg.n || 0;
-      if(msg.cancelled || !msg.n){
-        setCountdownText('');
-        renderLobby();
-      } else {
-        setCountdownText(msg.n > 0 ? msg.n : 'GO');
-      }
+      if(msg.cancelled || !msg.n){ setCountdownText(''); renderLobby(); }
+      else { setCountdownText(msg.n > 0 ? msg.n : 'GO'); }
     });
-
     activeRoom.onMessage('startGame', (msg) => {
-      console.log('[net] startGame received', msg);
       setCountdownText('');
       try{ startGame('multi'); }
       catch(e){ console.error('startGame failed:', e); alert('startGame error: '+e.message); }
     });
+    bindCommonRoomHandlers();
 
-    activeRoom.onMessage('playerState', (msg) => {
-      if(!msg || !msg.id || msg.id === state.mySessionId) return;
-      const existing = state.others.get(msg.id) || {};
-      state.others.set(msg.id, { ...existing, ...msg });
-    });
-
-    activeRoom.onLeave(() => {
-      console.log('[net] left room');
-    });
-
-    activeRoom.onError((code, message) => {
-      console.error('[net] room error', code, message);
-      alert('Room error: '+message);
-    });
+    activeRoom.onLeave(() => { console.log('[net] left room'); });
+    activeRoom.onError((code, message) => { console.error('[net] room error', code, message); alert('Room error: '+message); });
 
   } catch(e){
     console.error('Connection error:', e);
-    alert("Can\u0027t connect to the game server. It may be waking up — try again in a few seconds.\n\nDetails: "+e.message);
+    alert("Can't connect to the game server. It may be waking up — try again in a few seconds.\n\nDetails: "+e.message);
     setScene('mpMenu');
   }
 }
@@ -580,6 +816,7 @@ function broadcastTick(dt){
       name: p.name, heroId: p.heroId,
       x: p.x|0, y: p.y|0, angle: +p.angle.toFixed(2),
       hp: Math.ceil(p.hp), hpMax: p.hpMax, alive: p.alive,
+      dashing: p.dashing>0 ? 1 : 0,
     });
   }catch(e){}
 }
@@ -588,6 +825,7 @@ async function leaveLobby(targetScene='menu'){
   if(activeRoom){ try{ await activeRoom.leave(); }catch(e){} activeRoom=null; }
   state.roomCode=null; state.isHost=false; state.mySessionId=null;
   state.lobby.players.clear(); state.lobby.phase='waiting'; state.lobby.countdown=0;
+  state.others.clear();
   setCountdownText('');
   if(targetScene) setScene(targetScene);
 }
@@ -624,14 +862,10 @@ $('#btnJoin').onclick = ()=>{
   if(!code){ toast('Enter a room code'); return; }
   setScene('heroSelect'); renderHeroGrid();
   $('#heroConfirm').onclick = async ()=>{
-    // Try to join by id first; if it fails, joinOrCreate by name as fallback
     try{
       if(activeRoom){ try{ await activeRoom.leave(); }catch(e){} activeRoom=null; }
       activeRoom = await client.joinById(code, { name: state.username || 'Operator', heroId: state.hero });
       state.roomCode = activeRoom.id; state.mySessionId = activeRoom.sessionId;
-      // Re-bind handlers via joinRoom logic by simulating:
-      // (simplest: replace by calling joinRoom which leaves first — but we already joined.
-      //  Instead manually wire the same handlers below.)
       bindRoomHandlers();
       setScene('lobby');
       $('#lobbyCode').textContent = '· '+activeRoom.id;
@@ -659,7 +893,7 @@ function bindRoomHandlers(){
   activeRoom.onStateChange(refresh); refresh();
   activeRoom.onMessage('countdown', (msg)=>{ state.lobby.countdown = msg.n||0; if(msg.cancelled||!msg.n){ setCountdownText(''); renderLobby(); } else setCountdownText(msg.n>0?msg.n:'GO'); });
   activeRoom.onMessage('startGame', ()=>{ setCountdownText(''); try{ startGame('multi'); }catch(e){ console.error(e); } });
-  activeRoom.onMessage('playerState', (msg)=>{ if(!msg||!msg.id||msg.id===state.mySessionId) return; const ex=state.others.get(msg.id)||{}; state.others.set(msg.id,{...ex,...msg}); });
+  bindCommonRoomHandlers();
 }
 
 $('#lobbyLeave').onclick = ()=> leaveLobby('mpMenu');
