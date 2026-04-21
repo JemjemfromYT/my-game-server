@@ -63,20 +63,7 @@
   .hud .cd .k.ready{border-color:var(--green);color:var(--green)}
   .topright{position:fixed;right:14px;top:14px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;font-size:12px}
   .toast{position:fixed;left:50%;top:18%;transform:translateX(-50%);padding:10px 16px;border-radius:10px;background:rgba(0,0,0,.6);border:1px solid var(--magenta);color:var(--text);letter-spacing:.18em;text-transform:uppercase;font-size:12px;display:none}
-  .upgrade{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);z-index:50}
-  .upgrade.show{display:flex!important}
-  .damage-flash{position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 50%, transparent 40%, rgba(255,61,106,.55) 100%);opacity:0;transition:opacity .12s ease-out;z-index:30}
-  .damage-flash.on{opacity:1;transition:opacity .05s}
-  .wave-banner{position:fixed;left:50%;top:30%;transform:translateX(-50%);font-family:"Orbitron",monospace;font-size:42px;letter-spacing:.18em;color:var(--magenta);text-shadow:0 0 30px rgba(255,43,214,.9);opacity:0;pointer-events:none;z-index:25;text-align:center;text-transform:uppercase}
-  .wave-banner.on{animation:waveIn 2.4s ease-out forwards}
-  @keyframes waveIn{0%{opacity:0;transform:translate(-50%,20px) scale(.7)}15%{opacity:1;transform:translate(-50%,0) scale(1)}80%{opacity:1;transform:translate(-50%,0) scale(1)}100%{opacity:0;transform:translate(-50%,-30px) scale(1.05)}}
-  .xp-wrap{display:flex;align-items:center;gap:8px}
-  .xp-wrap .lvl{font-family:"Orbitron",monospace;color:var(--magenta);min-width:54px}
-  .xp-wrap .xpbar{width:240px;height:6px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;border:1px solid rgba(255,43,214,.3)}
-  .xp-wrap .xpbar i{display:block;height:100%;background:linear-gradient(90deg,var(--magenta),var(--violet));box-shadow:0 0 12px rgba(255,43,214,.6)}
-  .combo{position:fixed;right:14px;top:50%;transform:translateY(-50%);font-family:"Orbitron",monospace;color:var(--orange);text-shadow:0 0 20px rgba(255,138,61,.7);font-size:20px;opacity:0;transition:opacity .25s;text-align:right;pointer-events:none}
-  .combo.on{opacity:1}
-  .combo .x{font-size:36px;color:var(--magenta);text-shadow:0 0 24px rgba(255,43,214,.8)}
+  .upgrade{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(6px)}
   .upgrade .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;max-width:780px;width:92%}
   .ucard{padding:18px;border-radius:14px;cursor:pointer;background:var(--panel-2);border:1px solid rgba(157,92,255,.4);transition:transform .12s,box-shadow .15s}
   .ucard:hover{transform:translateY(-3px);box-shadow:0 0 40px rgba(157,92,255,.4)}
@@ -110,12 +97,31 @@
   #touchUI .tbtn.pressed{transform:scale(.92);filter:brightness(1.3)}
   #touchUI .tbtn .ring{position:absolute;inset:-2px;border-radius:50%;pointer-events:none;background:conic-gradient(rgba(0,0,0,.65) var(--cd,0%), transparent 0);-webkit-mask:radial-gradient(circle, transparent 56%, #000 58%);mask:radial-gradient(circle, transparent 56%, #000 58%);}
   #touchUI .tbtn.ready .ring{display:none}
+  /* Wave banner */
+  #waveBanner{position:fixed;left:50%;top:30%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;z-index:30;display:none;font-family:"Orbitron",monospace;text-shadow:0 0 30px rgba(255,43,214,.8),0 0 60px rgba(34,232,255,.5);}
+  #waveBanner.show{display:block;animation:wavePulse 1.6s ease-out}
+  #waveBanner .wbig{font-size:clamp(40px,9vw,96px);font-weight:900;letter-spacing:.2em;background:linear-gradient(90deg,#22e8ff,#ff2bd6);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  #waveBanner .wsub{font-size:clamp(12px,2.4vw,18px);letter-spacing:.4em;color:var(--cyan);margin-top:4px}
+  #waveBanner .wcount{font-size:clamp(60px,14vw,140px);font-weight:900;color:var(--magenta);text-shadow:0 0 40px rgba(255,43,214,.9);font-family:"Orbitron",monospace}
+  @keyframes wavePulse{0%{opacity:0;transform:translate(-50%,-50%) scale(.7)}20%{opacity:1;transform:translate(-50%,-50%) scale(1.05)}80%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.1)}}
+  /* Force upgrade modal visible (overrides .hidden !important) */
+  #upgrade.show{display:flex!important}
+  #upgrade{z-index:25}
   @media (max-width: 600px){
     .heroes{grid-template-columns:1fr!important}
     .hero-card img{aspect-ratio:16/9}
     .screen{padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(20px,env(safe-area-inset-bottom));align-items:flex-start;justify-content:flex-start}
     .neon-title{letter-spacing:.12em}
-    .hud{font-size:10px;gap:4px}
+    /* Compact HUD on mobile */
+    .hud{font-size:9px;gap:3px;left:6px;top:6px}
+    .hud .pill{padding:3px 6px;border-radius:6px;font-size:9px}
+    .hud .hp .bar{width:140px;height:7px}
+    .hud .hp #hpName{min-width:54px!important;font-size:10px}
+    .hud .hp #hpVal{min-width:48px!important;font-size:10px}
+    .hud .cd .k{padding:3px 5px;min-width:42px;font-size:9px}
+    .topright{right:6px;top:6px;font-size:9px}
+    .topright .pill{padding:3px 6px;font-size:9px}
+    .topright .btn{padding:4px 8px!important;font-size:10px!important}
     .btn{padding:14px 16px;min-height:48px;font-size:13px;width:100%}
     .row{flex-direction:column}
     .row .btn{width:100%}
@@ -231,23 +237,25 @@
       <div class="pill" id="pillScore">SCORE 0</div>
       <div class="pill" id="pillKills">KILLS 0</div>
       <div class="pill" id="pillFract" style="color:var(--magenta);border-color:var(--magenta)">FRACTURE 0</div>
-      <div class="xp-wrap"><div class="lvl" id="lvlVal">LV 1</div><div class="xpbar"><i id="xpBar" style="width:0%"></i></div></div>
     </div>
     <div class="topright">
       <div class="pill" id="pillRoom"></div>
       <div class="pill" id="pillAlive"></div>
       <button id="btnLeaveGame" class="btn ghost" style="padding:6px 10px;font-size:11px">Leave</button>
     </div>
-    <div id="combo" class="combo"><div class="x" id="comboX">x1</div><div id="comboTxt">COMBO</div></div>
   </div>
 
-  <div id="damageFlash" class="damage-flash"></div>
-  <div id="waveBanner" class="wave-banner"></div>
   <div id="toast" class="toast"></div>
+
+  <div id="waveBanner">
+    <div id="waveBigText" class="wbig">WAVE 1</div>
+    <div id="waveSubText" class="wsub">PREPARE</div>
+    <div id="waveCount" class="wcount"></div>
+  </div>
 
   <div id="upgrade" class="upgrade">
     <div class="col" style="align-items:center;gap:14px">
-      <div class="neon-title" id="upgradeTitle" style="font-size:24px">Choose an Upgrade</div>
+      <div class="neon-title" style="font-size:24px">Choose an Upgrade</div>
       <div id="ucards" class="cards"></div>
     </div>
   </div>
