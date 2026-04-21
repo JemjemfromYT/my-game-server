@@ -451,13 +451,80 @@ function drawBackground(){
 
 function withAlpha(hex,a){ if(!hex) return `rgba(255,255,255,${a})`; const m=hex.replace('#',''); const r=parseInt(m.slice(0,2),16),g=parseInt(m.slice(2,4),16),b=parseInt(m.slice(4,6),16); return `rgba(${r},${g},${b},${a})`; }
 
-// ---------- Upgrade picker ----------
+// ---------- Upgrade picker (crash-proof + addictive) ----------
+function ensureUpgradeDOM(){
+  let modal = document.getElementById('upgrade');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'upgrade';
+    modal.className = 'panel';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(5,3,13,.88);display:none;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(10px);';
+    modal.innerHTML = `
+      <div style="max-width:980px;width:92%;text-align:center;font-family:ui-monospace,monospace;color:#e7e3ff;">
+        <h2 class="neon-title" style="font-size:32px;margin:0 0 6px;">⚡ LEVEL UP</h2>
+        <p style="opacity:.65;margin:0 0 22px;letter-spacing:.2em;">CHOOSE AN UPGRADE · PRESS 1 · 2 · 3</p>
+        <div id="ucards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px;"></div>
+      </div>`;
+    document.body.appendChild(modal);
+    const css = document.createElement('style');
+    css.textContent = `
+      .ucard{background:linear-gradient(160deg,rgba(20,14,48,.9),rgba(10,8,28,.9));border:2px solid rgba(34,232,255,.4);border-radius:14px;padding:22px;cursor:pointer;transition:all .18s ease;position:relative;overflow:hidden;}
+      .ucard:hover{border-color:#22e8ff;transform:translateY(-6px) scale(1.02);box-shadow:0 12px 40px rgba(34,232,255,.35),inset 0 0 30px rgba(157,92,255,.15);}
+      .ucard.elite{border-color:#ffd54a;box-shadow:0 0 24px rgba(255,213,74,.3);}
+      .ucard.elite:hover{box-shadow:0 12px 40px rgba(255,213,74,.6);}
+      .ucard h4{color:#22e8ff;font-size:18px;margin:0 0 10px;letter-spacing:.15em;text-transform:uppercase;}
+      .ucard.elite h4{color:#ffd54a;}
+      .ucard p{color:#cfd8ff;font-size:13px;line-height:1.55;margin:0;}
+      .ucard .num{position:absolute;top:8px;right:12px;font-size:22px;font-weight:900;opacity:.35;}
+      @keyframes pulseGlow{0%,100%{box-shadow:0 0 12px rgba(34,232,255,.4);}50%{box-shadow:0 0 24px rgba(255,43,214,.6);}}
+      .xp-flash{animation:pulseGlow .6s ease;}`;
+    document.head.appendChild(css);
+  }
+  return modal;
+}
+
+let _upgradeKeyHandler = null;
 function showUpgradePicker(){
-  state.paused=true;
-  const choices = pickN(UPGRADES, 3);
-  const wrap = $('#ucards'); wrap.innerHTML='';
-  choices.forEach(u=>{ const el=document.createElement('div'); el.className='ucard'; el.innerHTML=`<h4>${u.name}</h4><p>${u.desc}</p>`; el.onclick=()=>{ u.apply(state.player); $('#upgrade').style.display='none'; state.paused=false; toast(`Acquired: ${u.name}`); }; wrap.appendChild(el); });
-  $('#upgrade').style.display='flex';
+  try {
+    state.paused = true;
+    const modal = ensureUpgradeDOM();
+    const wrap = document.getElementById('ucards');
+    if(!wrap){ state.paused = false; return; }
+    wrap.innerHTML = '';
+    const choices = pickN(UPGRADES, 3);
+    // 15% chance any card is "elite" — doubles the effect
+    const elites = choices.map(()=>Math.random() < 0.15);
+
+    const pick = (u, isElite) => {
+      try {
+        u.apply(state.player);
+        if(isElite) u.apply(state.player); // double-apply for elite
+      } catch(e){ console.error('upgrade apply failed', e); }
+      modal.style.display = 'none';
+      state.paused = false;
+      if(typeof toast === 'function') toast(`${isElite?'★ ELITE ':''}Acquired: ${u.name}`);
+      if(_upgradeKeyHandler){ document.removeEventListener('keydown', _upgradeKeyHandler); _upgradeKeyHandler = null; }
+    };
+
+    _upgradeKeyHandler = (e) => {
+      const idx = ['1','2','3'].indexOf(e.key);
+      if(idx >= 0 && choices[idx]) pick(choices[idx], elites[idx]);
+    };
+    document.addEventListener('keydown', _upgradeKeyHandler);
+
+    choices.forEach((u, i) => {
+      const el = document.createElement('div');
+      el.className = 'ucard' + (elites[i] ? ' elite' : '');
+      el.innerHTML = `<span class="num">${i+1}</span><h4>${elites[i]?'★ ':''}${u.name}</h4><p>${u.desc}${elites[i]?'<br/><b style="color:#ffd54a">ELITE: effect doubled.</b>':''}</p>`;
+      el.onclick = () => pick(u, elites[i]);
+      wrap.appendChild(el);
+    });
+    modal.style.display = 'flex';
+    if(typeof shake === 'function') shake(6);
+  } catch(err){
+    console.error('showUpgradePicker crashed:', err);
+    state.paused = false;
+  }
 }
 function pickN(arr,n){ const a=arr.slice(),out=[]; while(out.length<n && a.length){ out.push(a.splice(Math.floor(Math.random()*a.length),1)[0]); } return out; }
 
