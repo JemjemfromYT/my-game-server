@@ -4,7 +4,7 @@
 // ==============================================================
 
 // ---- Colyseus client ----
-const colyseusClient = new Colyseus.Client("ws://localhost:2567");
+const client = new Colyseus.Client("wss://my-game-server-production-aef3.up.railway.app");
 let activeRoom = null;
 
 // ---- Friendly error alerts (kept lightweight) ----
