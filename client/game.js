@@ -223,6 +223,15 @@ function initTouchUI(){
   stick.addEventListener('touchend', endStick); stick.addEventListener('touchcancel', endStick);
   function bindBtn(id,key){ const el=document.getElementById(id); el.addEventListener('touchstart', e=>{ e.preventDefault(); el.classList.add('pressed'); touch[key]=true; if(key==='dash') touch.dashEdge=true; if(key==='ability') touch.abiEdge=true; }, {passive:false}); const up=e=>{ e.preventDefault(); el.classList.remove('pressed'); touch[key]=false; }; el.addEventListener('touchend',up); el.addEventListener('touchcancel',up); }
   bindBtn('tAttack','attack'); bindBtn('tDash','dash'); bindBtn('tAbility','ability');
+  // Mobile revive button: pressing this is the same as holding the "E" key.
+  const reviveBtn = document.getElementById('tRevive');
+  if(reviveBtn){
+    const down = e=>{ e.preventDefault(); reviveBtn.classList.add('pressed'); keys['e'] = true; };
+    const up   = e=>{ e.preventDefault(); reviveBtn.classList.remove('pressed'); keys['e'] = false; };
+    reviveBtn.addEventListener('touchstart', down, {passive:false});
+    reviveBtn.addEventListener('touchend',   up);
+    reviveBtn.addEventListener('touchcancel',up);
+  }
   cvs.addEventListener('touchmove', e=>e.preventDefault(), {passive:false});
 }
 initTouchUI();
@@ -753,8 +762,15 @@ function findDownedTeammateNear(p){
 }
 
 function updateReviveInteraction(p, dt){
-  if(!p || !p.alive || p.downed){ state.reviveTarget = null; state.reviveHoldTime = 0; return; }
+  if(!p || !p.alive || p.downed){
+    state.reviveTarget = null; state.reviveHoldTime = 0;
+    const rb = document.getElementById('tRevive'); if(rb) rb.style.display = 'none';
+    return;
+  }
   const target = findDownedTeammateNear(p);
+  // Show/hide the mobile revive button based on proximity to a downed teammate.
+  const rb = document.getElementById('tRevive');
+  if(rb && IS_TOUCH) rb.style.display = target ? 'flex' : 'none';
   if(!target){
     state.reviveTarget = null;
     state.reviveHoldTime = 0;
@@ -982,6 +998,20 @@ async function joinRoom(roomName, options = {}){
     activeRoom.onStateChange(refresh);
     refresh();
 
+    // When a remote player disconnects mid-game, drop them from `state.others`
+    // so enemies don't keep targeting a ghost (which froze the game for the
+    // remaining players). Also clear any revive-target reference to them.
+    if(activeRoom.state.players && typeof activeRoom.state.players.onRemove === 'function'){
+      activeRoom.state.players.onRemove((_p, id) => {
+        if(state.others && state.others.has(id)){
+          if(state.reviveTarget && state.reviveTarget.id === id){
+            state.reviveTarget = null; state.reviveHoldTime = 0;
+          }
+          state.others.delete(id);
+        }
+      });
+    }
+
     activeRoom.onMessage('countdown', (msg) => {
       console.log('[net] countdown', msg);
       state.lobby.countdown = msg.n || 0;
@@ -1090,7 +1120,9 @@ function playRemoteAction(other, act, opts={}){
       particles(other.x,other.y,h.color,40,260,0.7,3);
     } else if(other.heroId==='jeb'){
       particles(other.x,other.y,'#3dffb0',60,220,0.9,3);
-      state.fx.push({x:other.x,y:other.y,vx:0,vy:0,life:4,life0:4,color:'#3dffb0',r:160,ring:true});
+      // Healing zone from a remote Jeb — flag heal:true so each client's
+      // updateFx() heals the LOCAL player when standing in the zone.
+      state.fx.push({x:other.x,y:other.y,vx:0,vy:0,life:4,life0:4,color:'#3dffb0',r:160,ring:true,heal:true,owner:other.id});
     } else if(other.heroId==='jeff'){
       particles(other.x,other.y,h.color,24,260,0.4,3);
     } else if(other.heroId==='joross'){
@@ -1206,6 +1238,16 @@ function bindRoomHandlers(){
     renderLobby();
   };
   activeRoom.onStateChange(refresh); refresh();
+  if(activeRoom.state.players && typeof activeRoom.state.players.onRemove === 'function'){
+    activeRoom.state.players.onRemove((_p, id) => {
+      if(state.others && state.others.has(id)){
+        if(state.reviveTarget && state.reviveTarget.id === id){
+          state.reviveTarget = null; state.reviveHoldTime = 0;
+        }
+        state.others.delete(id);
+      }
+    });
+  }
   activeRoom.onMessage('countdown', (msg)=>{ state.lobby.countdown = msg.n||0; if(msg.cancelled||!msg.n){ setCountdownText(''); renderLobby(); } else setCountdownText(msg.n>0?msg.n:'GO'); });
   activeRoom.onMessage('startGame', ()=>{ setCountdownText(''); try{ startGame('multi'); }catch(e){ console.error(e); } });
   activeRoom.onMessage('playerState', (msg)=> applyRemoteState(msg));
