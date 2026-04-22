@@ -575,7 +575,8 @@ function updateEnemies(dt){
     const localDist = Math.hypot(p.x-e.x,p.y-e.y);
     const touchingAny = players.some(cand => Math.hypot(cand.x-e.x,cand.y-e.y) < e.r + 18);
     if(touchingAny && e.cd<=0){
-      if(localDist<e.r+18){ const dmgIn=e.dmg; let rem=dmgIn; if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; } p.hp-=rem; SFX.hurt(); shake(4); particles(p.x,p.y,'#ff3d6a',8,180,0.4,2); }
+      // Don't damage / play hurt sfx for a player who is already dead or downed.
+      if(localDist<e.r+18 && p.alive && !p.downed){ const dmgIn=e.dmg; let rem=dmgIn; if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; } p.hp-=rem; SFX.hurt(); shake(4); particles(p.x,p.y,'#ff3d6a',8,180,0.4,2); }
       e.cd=0.6;
     }
   }
@@ -595,7 +596,7 @@ function updateEnemyContacts(dt){
   const p=state.player;
   for(const e of state.enemies){
     e.cd=Math.max(0,e.cd-dt);
-    if(Math.hypot(p.x-e.x,p.y-e.y)<e.r+18 && e.cd<=0){ const dmgIn=e.dmg; let rem=dmgIn; if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; } p.hp-=rem; SFX.hurt(); e.cd=0.6; shake(4); particles(p.x,p.y,'#ff3d6a',8,180,0.4,2); }
+    if(Math.hypot(p.x-e.x,p.y-e.y)<e.r+18 && e.cd<=0 && p.alive && !p.downed){ const dmgIn=e.dmg; let rem=dmgIn; if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; } p.hp-=rem; SFX.hurt(); e.cd=0.6; shake(4); particles(p.x,p.y,'#ff3d6a',8,180,0.4,2); }
   }
 }
 
@@ -1034,8 +1035,15 @@ async function joinRoom(roomName, options = {}){
     activeRoom.onMessage('enemyState', (msg) => applyEnemyState(msg));
 
     activeRoom.onMessage('hostMigrated', (msg) => {
+      const wasHost = state.isHost;
       state.isHost = (msg && msg.hostId === state.mySessionId);
-      if(state.isHost) toast('You are now the host', 1800);
+      if(state.isHost && !wasHost){
+        // We just became host. Drop bullets we fired pre-migration — they were
+        // spawned as ghosts (dmg=0) and would otherwise pass through enemies
+        // without ever killing them. New shots from now on will be authoritative.
+        state.bullets = state.bullets.filter(b => b.owner !== state.player.id);
+        toast('You are now the host', 1800);
+      }
     });
     activeRoom.onMessage('revive', (msg) => handleReviveMessage(msg));
 
@@ -1254,8 +1262,12 @@ function bindRoomHandlers(){
   activeRoom.onMessage('enemyState', (msg)=> applyEnemyState(msg));
 
   activeRoom.onMessage('hostMigrated', (msg)=>{
+    const wasHost = state.isHost;
     state.isHost = (msg && msg.hostId === state.mySessionId);
-    if(state.isHost) toast('You are now the host', 1800);
+    if(state.isHost && !wasHost){
+      state.bullets = state.bullets.filter(b => b.owner !== state.player.id);
+      toast('You are now the host', 1800);
+    }
   });
   activeRoom.onMessage('revive', (msg)=> handleReviveMessage(msg));
 }
