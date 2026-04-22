@@ -52,6 +52,11 @@ class GameRoom extends colyseus.Room {
     this.onMessage("playerState", (client, payload) => {
       this.broadcast("playerState", { id: client.sessionId, ...payload }, { except: client });
     });
+
+    this.onMessage("enemyState", (client, payload) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("enemyState", payload, { except: client });
+    });
   }
 
   onJoin(client, options) {
