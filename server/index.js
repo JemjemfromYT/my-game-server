@@ -15,6 +15,7 @@ schema.defineTypes(Player, {
   heroId: "string",
   ready: "boolean",
   isHost: "boolean",
+  alive: "boolean",
 });
 
 class LobbyState extends schema.Schema {
@@ -50,6 +51,18 @@ class GameRoom extends colyseus.Room {
 
     // Optional: broadcast in-game position updates between clients
     this.onMessage("playerState", (client, payload) => {
+      const p = this.state.players.get(client.sessionId);
+      if (p) {
+        const isAlive = !(payload && payload.alive === false);
+        if (p.alive !== isAlive) {
+          p.alive = isAlive;
+          // If the host just died, migrate host duties to another alive player
+          // so enemy simulation keeps running for everyone.
+          if (!isAlive && client.sessionId === this.state.hostId) {
+            this.migrateHost(client.sessionId);
+          }
+        }
+      }
       this.broadcast("playerState", { id: client.sessionId, ...payload }, { except: client });
     });
 
@@ -64,6 +77,7 @@ class GameRoom extends colyseus.Room {
     p.name   = (options && options.name)   || "Survivor";
     p.heroId = (options && options.heroId) || "james";
     p.ready  = false;
+    p.alive  = true;
     p.isHost = this.state.players.size === 0;
     if (p.isHost) this.state.hostId = client.sessionId;
     this.state.players.set(client.sessionId, p);
@@ -75,18 +89,42 @@ class GameRoom extends colyseus.Room {
     console.log(`[leave] ${client.sessionId}`);
     // Promote new host if needed
     if (this.state.hostId === client.sessionId) {
-      const next = this.state.players.keys().next().value;
-      this.state.hostId = next || "";
-      if (next) {
-        const np = this.state.players.get(next);
-        if (np) np.isHost = true;
-      }
+      this.migrateHost(client.sessionId);
     }
     // Cancel countdown if player count drops below 2
     if (this.state.players.size < 2 && this.state.phase === "starting") {
       this.cancelCountdown();
     } else {
       this.evaluateStart();
+    }
+  }
+
+  // Pick a new host — prefer an alive player, fall back to any remaining player.
+  migrateHost(excludeId) {
+    let nextId = "";
+    for (const [id, pl] of this.state.players.entries()) {
+      if (id === excludeId) continue;
+      if (pl.alive) { nextId = id; break; }
+    }
+    if (!nextId) {
+      for (const [id] of this.state.players.entries()) {
+        if (id === excludeId) continue;
+        nextId = id; break;
+      }
+    }
+
+    // Clear previous host flag
+    const prev = this.state.players.get(this.state.hostId);
+    if (prev) prev.isHost = false;
+
+    this.state.hostId = nextId || "";
+    if (nextId) {
+      const np = this.state.players.get(nextId);
+      if (np) np.isHost = true;
+      console.log(`[host-migrate] new host=${nextId}`);
+      this.broadcast("hostMigrated", { hostId: nextId });
+    } else {
+      console.log(`[host-migrate] no eligible host`);
     }
   }
 
@@ -117,6 +155,8 @@ class GameRoom extends colyseus.Room {
         this.countdownInterval = null;
         this.state.phase = "in-game";
         this.state.countdown = 0;
+        // Reset alive flags at game start
+        for (const pl of this.state.players.values()) pl.alive = true;
         console.log(`[start] broadcasting startGame`);
         this.broadcast("startGame", { at: Date.now() });
       }
