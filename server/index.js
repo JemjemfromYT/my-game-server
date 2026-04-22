@@ -16,6 +16,7 @@ schema.defineTypes(Player, {
   ready: "boolean",
   isHost: "boolean",
   alive: "boolean",
+  downed: "boolean",
 });
 
 class LobbyState extends schema.Schema {
@@ -49,18 +50,18 @@ class GameRoom extends colyseus.Room {
       this.evaluateStart();
     });
 
-    // Optional: broadcast in-game position updates between clients
+    // In-game position updates between clients. Also tracks alive/downed
+    // for host migration when current host dies / goes down.
     this.onMessage("playerState", (client, payload) => {
       const p = this.state.players.get(client.sessionId);
-      if (p) {
-        const isAlive = !(payload && payload.alive === false);
-        if (p.alive !== isAlive) {
-          p.alive = isAlive;
-          // If the host just died, migrate host duties to another alive player
-          // so enemy simulation keeps running for everyone.
-          if (!isAlive && client.sessionId === this.state.hostId) {
-            this.migrateHost(client.sessionId);
-          }
+      if (p && payload) {
+        const isAlive = !(payload.alive === false);
+        const isDowned = !!payload.downed;
+        if (p.alive !== isAlive) p.alive = isAlive;
+        if (p.downed !== isDowned) p.downed = isDowned;
+        // If the host can no longer simulate (dead or downed), hand off.
+        if ((!isAlive || isDowned) && client.sessionId === this.state.hostId) {
+          this.migrateHost(client.sessionId);
         }
       }
       this.broadcast("playerState", { id: client.sessionId, ...payload }, { except: client });
@@ -70,6 +71,39 @@ class GameRoom extends colyseus.Room {
       if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
       this.broadcast("enemyState", payload, { except: client });
     });
+
+    // Revive: forward to everyone (including host) so the downed player can
+    // be brought back up. Host applies it authoritatively for enemies; the
+    // downed client re-enables their own controls when they receive it.
+    this.onMessage("revive", (client, payload) => {
+      this.broadcast("revive", { from: client.sessionId, ...(payload || {}) });
+    });
+  }
+
+  migrateHost(excludeId) {
+    let nextId = "";
+    // Prefer a player who is alive and not downed.
+    for (const [id, pl] of this.state.players.entries()) {
+      if (id === excludeId) continue;
+      if (pl.alive && !pl.downed) { nextId = id; break; }
+    }
+    if (!nextId) {
+      for (const [id] of this.state.players.entries()) {
+        if (id === excludeId) continue;
+        nextId = id; break;
+      }
+    }
+    // Clear previous host flag
+    for (const [id, pl] of this.state.players.entries()) {
+      if (pl.isHost && id !== nextId) pl.isHost = false;
+    }
+    this.state.hostId = nextId || "";
+    if (nextId) {
+      const np = this.state.players.get(nextId);
+      if (np) np.isHost = true;
+      this.broadcast("hostMigrated", { hostId: nextId });
+      console.log(`[host] migrated to ${nextId}`);
+    }
   }
 
   onJoin(client, options) {
@@ -78,6 +112,7 @@ class GameRoom extends colyseus.Room {
     p.heroId = (options && options.heroId) || "james";
     p.ready  = false;
     p.alive  = true;
+    p.downed = false;
     p.isHost = this.state.players.size === 0;
     if (p.isHost) this.state.hostId = client.sessionId;
     this.state.players.set(client.sessionId, p);
@@ -96,35 +131,6 @@ class GameRoom extends colyseus.Room {
       this.cancelCountdown();
     } else {
       this.evaluateStart();
-    }
-  }
-
-  // Pick a new host — prefer an alive player, fall back to any remaining player.
-  migrateHost(excludeId) {
-    let nextId = "";
-    for (const [id, pl] of this.state.players.entries()) {
-      if (id === excludeId) continue;
-      if (pl.alive) { nextId = id; break; }
-    }
-    if (!nextId) {
-      for (const [id] of this.state.players.entries()) {
-        if (id === excludeId) continue;
-        nextId = id; break;
-      }
-    }
-
-    // Clear previous host flag
-    const prev = this.state.players.get(this.state.hostId);
-    if (prev) prev.isHost = false;
-
-    this.state.hostId = nextId || "";
-    if (nextId) {
-      const np = this.state.players.get(nextId);
-      if (np) np.isHost = true;
-      console.log(`[host-migrate] new host=${nextId}`);
-      this.broadcast("hostMigrated", { hostId: nextId });
-    } else {
-      console.log(`[host-migrate] no eligible host`);
     }
   }
 
@@ -155,8 +161,11 @@ class GameRoom extends colyseus.Room {
         this.countdownInterval = null;
         this.state.phase = "in-game";
         this.state.countdown = 0;
-        // Reset alive flags at game start
-        for (const pl of this.state.players.values()) pl.alive = true;
+        // Reset alive/downed for everyone at game start.
+        for (const pl of this.state.players.values()) {
+          pl.alive = true;
+          pl.downed = false;
+        }
         console.log(`[start] broadcasting startGame`);
         this.broadcast("startGame", { at: Date.now() });
       }

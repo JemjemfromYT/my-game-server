@@ -135,6 +135,13 @@ const state = {
   // MP
   roomCode: null,
   isHost: false,
+  // Upgrade picker tracking (per local player, not server-driven)
+  upgradeOpenForWave: 0,    // wave # the picker is currently open for
+  upgradeChosenForWave: 0,  // wave # the player has already picked an upgrade for
+  // Revive system
+  reviveHoldTime: 0,        // seconds holding E over a downed teammate
+  reviveTarget: null,       // current downed teammate being revived
+  beingRevivedTime: 0,      // seconds local downed player has been revived for (visual)
   mySessionId: null,
   lobby: { players: new Map(), countdown: 0, phase:'waiting' },
   enemySeq: 1,
@@ -299,6 +306,8 @@ function startGame(mode='single'){
   state.time=0; state.score=0; state.kills=0; state.fracture=0;
   state.wave=0; state.wavePhase='prep'; state.waveTimer=WAVE_PREP;
   state.waveSpawnTimer=0; state.waveToSpawn=0; state.waveEnemiesAlive=0;
+  state.upgradeChosenForWave = 0; state.upgradeOpenForWave = 0;
+  state.reviveHoldTime = 0; state.reviveTarget = null; state.beingRevivedTime = 0;
   state.paused=false; state.running=true;
   state.cam.shake=0;
   state.enemySeq = 1;
@@ -354,6 +363,9 @@ function startWavePrep(n){
   state.waveToSpawn = WAVE_ENEMIES(n);
   state.waveEnemiesAlive = 0;
   state.waveSpawnTimer = 0;
+  // New wave: any previous picker bookkeeping no longer applies.
+  state.upgradeChosenForWave = 0;
+  state.upgradeOpenForWave = 0;
   showWaveBanner(`WAVE ${n}`, 'PREPARE', 2200);
   toast(`Wave ${n} incoming in ${WAVE_PREP}s`, 1800);
 }
@@ -445,11 +457,31 @@ function update(dt){
     if(state.isHost) broadcastEnemyState(dt);
   }
 
-  if(p.hp<=0 && p.alive){ p.alive=false; particles(p.x,p.y,'#ff3d6a',40,260,0.9,3); shake(14); setTimeout(()=>endGame(false), 400); }
+  if(p.hp<=0 && p.alive){
+    p.alive=false; particles(p.x,p.y,'#ff3d6a',40,260,0.9,3); shake(14);
+    if(state.mode === 'multi'){
+      // Downed: stay on the field, can be revived by a teammate.
+      p.downed = true; p.hp = 0; p.vx = 0; p.vy = 0;
+      toast('YOU ARE DOWN — wait for a teammate to revive (E)', 2400);
+      // Force an immediate state push so the host learns we are down.
+      try{ broadcastTick(1); }catch(e){}
+      // Only end the run if every player (us + others) is down/dead.
+      setTimeout(()=>{
+        const anyAliveOther = [...state.others.values()].some(o => o && o.alive !== false && !o.downed);
+        if(!anyAliveOther) endGame(false);
+      }, 600);
+    } else {
+      setTimeout(()=>endGame(false), 400);
+    }
+  }
+  // Revive interaction (multi only): hold E while standing on a downed teammate.
+  if(state.mode === 'multi'){ updateReviveInteraction(state.player, dt); }
 }
 
 function updatePlayer(p, dt, isLocal){
   const h = HEROES[p.heroId];
+  // Downed players don't move or fire — they wait to be revived.
+  if(p.downed){ p.vx = 0; p.vy = 0; return; }
   let mx = touch.active ? touch.mx : ((keys['d']?1:0)-(keys['a']?1:0));
   let my = touch.active ? touch.my : ((keys['s']?1:0)-(keys['w']?1:0));
   if(!isLocal){ mx=0; my=0; }
@@ -609,6 +641,34 @@ function render(){
 function drawPlayer(p, local){
   if(!p) return;
   const h = HEROES[p.heroId]; if(!h) return;
+  // Downed players render as a dim ring on the floor with a SOS marker.
+  if(p.downed){
+    ctx.save();
+    ctx.strokeStyle = withAlpha('#ff3d6a', 0.85);
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = withAlpha('#ff3d6a', 0.18);
+    ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font='bold 11px ui-monospace,monospace'; ctx.textAlign='center';
+    ctx.fillText('DOWN', p.x, p.y+4);
+    ctx.fillText(p.name||'P', p.x, p.y-26);
+    // If the local player is currently reviving THIS downed teammate, draw progress arc.
+    if(!local && state.reviveTarget === p && state.reviveHoldTime > 0){
+      const t = Math.min(1, state.reviveHoldTime / REVIVE_HOLD_SECONDS);
+      ctx.strokeStyle = '#3dffb0'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 24, -Math.PI/2, -Math.PI/2 + t*Math.PI*2); ctx.stroke();
+      ctx.fillStyle = '#3dffb0'; ctx.font='10px ui-monospace,monospace';
+      ctx.fillText('REVIVING…', p.x, p.y+34);
+    } else if(local){
+      ctx.fillStyle = '#ff8a3d'; ctx.font='10px ui-monospace,monospace';
+      ctx.fillText('WAITING FOR REVIVE', p.x, p.y+34);
+    } else {
+      ctx.fillStyle = '#ffd166'; ctx.font='10px ui-monospace,monospace';
+      ctx.fillText('HOLD E TO REVIVE', p.x, p.y+34);
+    }
+    ctx.restore();
+    return;
+  }
   if(p.dashing>0){ for(let i=0;i<6;i++){ ctx.fillStyle=withAlpha(h.color,0.06+i*0.02); ctx.beginPath(); ctx.arc(p.x-Math.cos(p.angle)*i*4,p.y-Math.sin(p.angle)*i*4,16,0,Math.PI*2); ctx.fill(); } }
   ctx.save(); ctx.translate(p.x,p.y); ctx.shadowColor=h.color; ctx.shadowBlur=22;
   ctx.fillStyle = local ? h.color : '#ffffff';
@@ -639,6 +699,12 @@ function withAlpha(hex,a){ if(!hex) return `rgba(255,255,255,${a})`; const m=hex
 function showUpgradePicker(){
   const modal = document.getElementById('upgrade');
   if(!modal) return;
+  // Don't reopen the picker for a wave the player already chose.
+  if(state.upgradeChosenForWave === state.wave) return;
+  // Already open for the current wave -> nothing to do (avoids re-randomising).
+  if(state.upgradeOpenForWave === state.wave && modal.style.display === 'flex') return;
+  state.upgradeOpenForWave = state.wave;
+  const waveAtOpen = state.wave;
   const choices = pickN(UPGRADES, 3);
   const wrap = $('#ucards'); wrap.innerHTML='';
   choices.forEach(u=>{
@@ -647,10 +713,15 @@ function showUpgradePicker(){
     el.innerHTML=`<h4>${u.name}</h4><p>${u.desc}</p>`;
     el.onclick=()=>{
       u.apply(state.player);
+      // Mark this wave as chosen BEFORE hiding so late host broadcasts
+      // arriving with phase==='upgrade' won't re-open the picker.
+      state.upgradeChosenForWave = waveAtOpen;
       hideUpgrade();
       toast(`Acquired: ${u.name}`);
-      // Advance to the next wave's prep
-      startWavePrep(state.wave + 1);
+      // Host advances the wave authoritatively. Joiners just wait for
+      // the host to broadcast the next wave; the simulation already
+      // continues for everyone because we don't pause it.
+      if(canAuthorEnemies()) startWavePrep(state.wave + 1);
     };
     wrap.appendChild(el);
   });
@@ -664,6 +735,72 @@ function hideUpgrade(){
   modal.classList.remove('show');
   modal.classList.add('hidden');
   modal.style.display='none';
+  state.upgradeOpenForWave = 0;
+}
+
+// ---------- Revive system (multiplayer) ----------
+const REVIVE_HOLD_SECONDS = 2.5;
+const REVIVE_RANGE = 38;
+
+function findDownedTeammateNear(p){
+  let best = null, bd = Infinity;
+  for(const o of state.others.values()){
+    if(!o || !o.downed) continue;
+    const d = Math.hypot((o.x||0) - p.x, (o.y||0) - p.y);
+    if(d < REVIVE_RANGE && d < bd){ best = o; bd = d; }
+  }
+  return best;
+}
+
+function updateReviveInteraction(p, dt){
+  if(!p || !p.alive || p.downed){ state.reviveTarget = null; state.reviveHoldTime = 0; return; }
+  const target = findDownedTeammateNear(p);
+  if(!target){
+    state.reviveTarget = null;
+    state.reviveHoldTime = 0;
+    return;
+  }
+  // Hold E to revive.
+  if(keys['e']){
+    if(state.reviveTarget !== target){ state.reviveTarget = target; state.reviveHoldTime = 0; }
+    state.reviveHoldTime += dt;
+    // Visual feedback while charging.
+    if(Math.random() < 0.5) particles(target.x, target.y, '#3dffb0', 1, 60, 0.4, 2);
+    if(state.reviveHoldTime >= REVIVE_HOLD_SECONDS){
+      // Trigger a revive: tell everyone (including the downed player and the host).
+      try{ activeRoom && activeRoom.send('revive', { targetId: target.id }); }catch(e){}
+      // Optimistically update the downed teammate locally.
+      target.downed = false; target.alive = true;
+      target.hp = Math.max(target.hp || 0, (target.hpMax||100) * 0.5);
+      toast(`Revived ${target.name||'teammate'}`);
+      state.reviveTarget = null;
+      state.reviveHoldTime = 0;
+    }
+  } else {
+    state.reviveHoldTime = 0;
+    state.reviveTarget = target; // still the candidate, just not charging
+  }
+}
+
+function handleReviveMessage(msg){
+  if(!msg || !msg.targetId) return;
+  // Are WE the one being revived?
+  if(msg.targetId === state.mySessionId){
+    const p = state.player;
+    if(p){
+      p.downed = false;
+      p.alive = true;
+      p.hp = Math.max(1, (p.hpMax||100) * 0.5);
+      state.beingRevivedTime = 1.2;
+      toast('You were revived!');
+      // Push our updated state immediately so the host stops thinking we're down.
+      try{ broadcastTick(1); }catch(e){}
+    }
+    return;
+  }
+  // Otherwise, update the relevant remote player.
+  const o = state.others.get(msg.targetId);
+  if(o){ o.downed = false; o.alive = true; o.hp = Math.max(o.hp||0, (o.hpMax||100) * 0.5); }
 }
 function pickN(arr,n){ const a=arr.slice(),out=[]; while(out.length<n && a.length){ out.push(a.splice(Math.floor(Math.random()*a.length),1)[0]); } return out; }
 
@@ -759,20 +896,31 @@ function applyEnemyState(msg){
   state.enemies = next;
 
   if(state.scene !== 'game') return;
+  // The picker is owned by the LOCAL player. We must never auto-close it
+  // just because the host moved on to the next wave — that was the bug
+  // where joiners lost their pick when the host chose first.
+  // We also don't reopen it for waves the local player already chose.
+  if(state.wave > prevWave){
+    // New wave starting (host advanced). Reset our per-wave bookkeeping.
+    if(state.upgradeChosenForWave && state.upgradeChosenForWave < state.wave){
+      state.upgradeChosenForWave = 0;
+    }
+    state.upgradeOpenForWave = 0;
+  }
   if(prevPhase !== state.wavePhase || prevWave !== state.wave){
     if(state.wavePhase === 'prep'){
-      hideUpgrade();
       showWaveBanner(`WAVE ${state.wave}`, 'PREPARE', 1200);
     } else if(state.wavePhase === 'active'){
-      hideUpgrade();
       hideWaveBanner();
       showWaveBanner(`WAVE ${state.wave}`, 'FIGHT!', 1200);
     } else if(state.wavePhase === 'upgrade'){
       showWaveBanner(`WAVE ${state.wave} CLEARED`, 'CHOOSE UPGRADE', 1500);
-      if(document.getElementById('upgrade')?.style.display !== 'flex') showUpgradePicker();
+      // Only open if the local player hasn't already picked for this wave.
+      if(state.upgradeChosenForWave !== state.wave){
+        const modal = document.getElementById('upgrade');
+        if(modal && modal.style.display !== 'flex') showUpgradePicker();
+      }
     }
-  } else if(state.wavePhase !== 'upgrade') {
-    hideUpgrade();
   }
 }
 
@@ -855,6 +1003,12 @@ async function joinRoom(roomName, options = {}){
     activeRoom.onMessage('playerState', (msg) => applyRemoteState(msg));
     activeRoom.onMessage('enemyState', (msg) => applyEnemyState(msg));
 
+    activeRoom.onMessage('hostMigrated', (msg) => {
+      state.isHost = (msg && msg.hostId === state.mySessionId);
+      if(state.isHost) toast('You are now the host', 1800);
+    });
+    activeRoom.onMessage('revive', (msg) => handleReviveMessage(msg));
+
     activeRoom.onLeave(() => {
       console.log('[net] left room');
     });
@@ -895,7 +1049,7 @@ function broadcastTick(dt){
     const payload = {
       name: p.name, heroId: p.heroId,
       x: p.x|0, y: p.y|0, angle: +p.angle.toFixed(2),
-      hp: Math.ceil(p.hp), hpMax: p.hpMax, alive: p.alive,
+      hp: Math.ceil(p.hp), hpMax: p.hpMax, alive: p.alive, downed: !!p.downed,
       dashing: p.dashing>0 ? 1 : 0,
       mods: p.mods,
       ts: Date.now(),
@@ -947,13 +1101,14 @@ function playRemoteAction(other, act, opts={}){
 
 function applyRemoteState(msg){
   if(!msg || !msg.id || msg.id === state.mySessionId) return;
-  const ex = state.others.get(msg.id) || { id: msg.id, x: msg.x||0, y: msg.y||0, rx: msg.x||0, ry: msg.y||0, alive: true, mods: makeDefaultMods() };
+  const ex = state.others.get(msg.id) || { id: msg.id, x: msg.x||0, y: msg.y||0, rx: msg.x||0, ry: msg.y||0, alive: true, downed: false, mods: makeDefaultMods() };
   ex.heroId = msg.heroId || ex.heroId || 'james';
   ex.name = msg.name || ex.name || 'Player';
   ex.angle = (typeof msg.angle === 'number') ? msg.angle : (ex.angle||0);
   ex.hp = (typeof msg.hp === 'number') ? msg.hp : ex.hp;
   ex.hpMax = msg.hpMax || ex.hpMax || 100;
   ex.alive = msg.alive !== false;
+  ex.downed = !!msg.downed;
   ex.dashing = msg.dashing ? 0.18 : (ex.dashing||0);
   ex.mods = Object.assign(makeDefaultMods(), ex.mods || {}, msg.mods || {});
   const dx = (msg.x||0) - (ex.rx||0), dy = (msg.y||0) - (ex.ry||0);
@@ -1055,6 +1210,12 @@ function bindRoomHandlers(){
   activeRoom.onMessage('startGame', ()=>{ setCountdownText(''); try{ startGame('multi'); }catch(e){ console.error(e); } });
   activeRoom.onMessage('playerState', (msg)=> applyRemoteState(msg));
   activeRoom.onMessage('enemyState', (msg)=> applyEnemyState(msg));
+
+  activeRoom.onMessage('hostMigrated', (msg)=>{
+    state.isHost = (msg && msg.hostId === state.mySessionId);
+    if(state.isHost) toast('You are now the host', 1800);
+  });
+  activeRoom.onMessage('revive', (msg)=> handleReviveMessage(msg));
 }
 
 $('#lobbyLeave').onclick = ()=> leaveLobby('mpMenu');
