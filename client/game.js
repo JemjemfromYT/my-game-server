@@ -1124,10 +1124,9 @@ function castPlayerBossSkill(p){
   bs.cd = bs.cdMax * (p.mods && p.mods.cdr ? p.mods.cdr : 1);
   try{ SFX.ability(p.heroId); }catch(e){}
   particles(p.x, p.y, col, 28, 260, 0.5, 3);
-  // Broadcast cast to other players so they see the visual effect.
-  if(isMultiMode() && activeRoom){
-    try{ activeRoom.send('playerSkillCast', { skillId: bs.id, x: p.x|0, y: p.y|0, angle: +ang.toFixed(3), color: col }); }catch(e){}
-  }
+  // Queue as a player-state action so the existing playerState relay
+  // broadcasts it to every other client without needing a new server handler.
+  queueAction({ t:'bsc', id: bs.id, col: col, a: +ang.toFixed(3) });
 }
 
 // Visual-only replay of a remote player's boss-skill cast.
@@ -3832,6 +3831,10 @@ function playRemoteAction(other, act, opts={}){
       state.fx.push({x:other.x,y:other.y,vx:0,vy:0,life:4,life0:4,color:'#3dffb0',r:160,ring:true,heal:true,owner:other.id});
     } else if(other.heroId==='jeff'){ particles(other.x,other.y,h.color,24,260,0.4,3); }
     else if(other.heroId==='joross'){ particles(other.x,other.y,h.color,20,200,0.4,2); }
+  } else if(act.t === 'bsc'){
+    // Boss-skill cast from another player — render visual effects at their position.
+    applyRemotePlayerSkillCast({ skillId: act.id, x: other.x, y: other.y, angle: (typeof act.a === 'number' ? act.a : other.angle||0), color: act.col });
+    try{ SFX.ability(other.heroId); }catch(e){}
   }
 }
 
