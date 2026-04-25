@@ -363,6 +363,7 @@ const state = {
   mySessionId: null,
   lobby: { players: new Map(), countdown: 0, phase:'waiting' },
   enemySeq: 1,
+  pickupSeq: 1,
   // ---- GOD MODE ----
   god: null,   // populated in startGodMode()
 };
@@ -669,6 +670,8 @@ function shake(amt){ state.cam.shake = Math.min(20, state.cam.shake + amt); }
 function startGame(mode='single'){
   state.mode = mode;
   state.enemies.length=0; state.bullets.length=0; state.fx.length=0; state.pickups.length=0;
+  state.pickupSeq = 1;
+  if(activeRoom && state.isHost){ try{ activeRoom.send('pickupClear', {}); }catch(e){} }
   state.others.clear();
   state.time=0; state.score=0; state.kills=0; state.fracture=0;
   state.wave=0; state.wavePhase='prep'; state.waveTimer=WAVE_PREP;
@@ -1307,6 +1310,12 @@ function updatePickups(dt){
     if(p.alive && !p.downed && Math.hypot(p.x-pk.x, p.y-pk.y) < collectR){
       // collect!
       pk.dead = true;
+      // Tell every other client to remove this floor sprite. The collector
+      // applies the upgrade to themselves locally below; remotes do nothing
+      // except erase the pickup.
+      if(activeRoom && pk.pid != null){
+        try{ activeRoom.send('pickupCollect', { pid: pk.pid }); }catch(e){}
+      }
       if(pk.bossSkill){
         // Boss-skill drop: equip on the local player only. Other players
         // can't claim it because it's removed from state.pickups now.
@@ -2330,13 +2339,22 @@ const GOD = (() => {
     });
   }
 
+  function _nextPid(){
+    // Salt with the host's session id (last 4 chars) so a host migration
+    // doesn't accidentally collide pids with the previous host's history.
+    const salt = (state.mySessionId || 'host').slice(-4);
+    return `${salt}-${state.pickupSeq++}`;
+  }
+
   function spawnPickup(){
     const a = state.arena;
     const x = 120 + Math.random()*(a.w-240);
     const y = 120 + Math.random()*(a.h-240);
     const upg = UPGRADES[Math.floor(Math.random()*UPGRADES.length)];
     const rarity = rollRarity();
-    state.pickups.push({ id:upg.id, name:upg.name, rarity:rarity.id, x, y, t:0 });
+    const pk = { pid:_nextPid(), id:upg.id, name:upg.name, rarity:rarity.id, color:(upg.color||rarity.color), x, y, t:0 };
+    state.pickups.push(pk);
+    broadcastPickupSpawn(pk);
     // Spawn fx scales with rarity — legendary is unmissable.
     const sparkColor = rarity.id === 'common' ? (upg.color || '#ffd166') : rarity.color;
     const sparkN = rarity.id === 'common' ? 12 : (rarity.id === 'rare' ? 24 : (rarity.id === 'epic' ? 40 : 70));
@@ -2354,7 +2372,8 @@ const GOD = (() => {
   function spawnBossSkillPickup(boss, phaseDef){
     if(!phaseDef || !phaseDef.signature) return;
     const info = PLAYER_BOSS_SKILL_INFO[phaseDef.signature];
-    state.pickups.push({
+    const pk = {
+      pid: _nextPid(),
       bossSkill: true,
       skillId: phaseDef.signature,
       skillName: info ? info.name : phaseDef.signature,
@@ -2362,7 +2381,9 @@ const GOD = (() => {
       phase: state.god ? state.god.phase : 0,
       x: boss.x, y: boss.y,
       t: 0,
-    });
+    };
+    state.pickups.push(pk);
+    broadcastPickupSpawn(pk);
     // Big flashy spawn fx so players notice the special drop.
     particles(boss.x, boss.y, phaseDef.color, 60, 320, 0.9, 4);
     state.fx.push({ring:true, x:boss.x, y:boss.y, color:phaseDef.color, life:0.9, life0:0.9, r:0, _maxR:140});
@@ -3530,7 +3551,14 @@ function applyBossFxMessage(msg){
   if(state.isHost) return;
   if(!msg || !Array.isArray(msg.fx)) return;
   for(const raw of msg.fx){
-    const f = Object.assign({}, raw, { _sent: true });
+    // CRITICAL: default vx/vy to 0. The broadcast payload omits velocity, so
+    // without this any fx that isn't ring/beam/warn/zone (i.e. _shock, _pull,
+    // _flash) would do `f.x += undefined * dt` → NaN, breaking distance
+    // checks and silently disabling damage on joiners. That's why telegraph
+    // beams hurt the joiner but shockwaves / void zones / pulls didn't.
+    const f = Object.assign({ vx:0, vy:0 }, raw, { _sent: true });
+    if(typeof f.vx !== 'number') f.vx = 0;
+    if(typeof f.vy !== 'number') f.vy = 0;
     // Re-link _bossRef to the local mirror of that boss so anchored fx
     // (e.g. radial_collapse contracting ring, gravity_well rings) follow
     // the boss on the joiner's screen too.
@@ -3569,6 +3597,55 @@ function applyPurgeFxMessage(){
   if(state.isHost) return;
   state.fx = state.fx.filter(f => !(f.warn || f.beam || f.zone || f._shock || f._pull || f._flash));
   state.bullets = state.bullets.filter(b => !b.hostile);
+}
+
+// ----------------------------------------------------------------------------
+// PICKUP REPLICATION (host-authoritative spawn, anyone-can-collect).
+// Without this, joiners can't see floor drops or boss-skill drops at all.
+// ----------------------------------------------------------------------------
+function applyPickupSpawnMessage(msg){
+  if(state.isHost) return;
+  if(!msg || msg.pid == null) return;
+  // De-dupe in case of stray re-broadcasts.
+  if(state.pickups.some(pk => pk.pid === msg.pid)) return;
+  const pk = Object.assign({}, msg, { t: 0, _sent: true });
+  state.pickups.push(pk);
+  // Match the host's spawn-fx so the joiner sees the same drop-in.
+  const sparkColor = pk.color || (pk.bossSkill ? '#ffd166' : '#ffd166');
+  const isLegendary = pk.rarity === 'legendary';
+  const isEpic = pk.rarity === 'epic';
+  const isRare = pk.rarity === 'rare';
+  const sparkN = pk.bossSkill ? 60 : (isLegendary ? 70 : isEpic ? 40 : isRare ? 24 : 12);
+  const sparkSpd = (pk.bossSkill || isLegendary || isEpic || isRare) ? 320 : 140;
+  particles(pk.x, pk.y, sparkColor, sparkN, sparkSpd, 0.9, 4);
+  if(pk.bossSkill){
+    state.fx.push({ring:true, x:pk.x, y:pk.y, color:sparkColor, life:0.9, life0:0.9, r:0, _maxR:140});
+  } else if(isLegendary || isEpic || isRare){
+    const r0 = isLegendary ? 110 : isEpic ? 80 : 55;
+    state.fx.push({ring:true, x:pk.x, y:pk.y, color:sparkColor, life:0.55, life0:0.55, r:0, _maxR:r0});
+  }
+}
+function applyPickupCollectMessage(msg){
+  if(!msg || msg.pid == null) return;
+  // Just remove the pickup from our local world — the collector applied the
+  // upgrade to their own player locally before sending this message.
+  state.pickups = state.pickups.filter(pk => pk.pid !== msg.pid);
+}
+function applyPickupClearMessage(){
+  if(state.isHost) return;
+  state.pickups.length = 0;
+}
+function broadcastPickupSpawn(pk){
+  if(!activeRoom || !state.isHost) return;
+  try{
+    activeRoom.send('pickupSpawn', {
+      pid: pk.pid,
+      x: pk.x|0, y: pk.y|0,
+      id: pk.id, name: pk.name, rarity: pk.rarity,
+      bossSkill: !!pk.bossSkill, skillId: pk.skillId, skillName: pk.skillName,
+      color: pk.color, phase: pk.phase,
+    });
+  }catch(e){}
 }
 
 function setCountdownText(text){
@@ -3841,6 +3918,9 @@ function bindRoomHandlers(){
   activeRoom.onMessage('bossBullets', (msg)=> applyBossBulletsMessage(msg));
   activeRoom.onMessage('bossHit', (msg)=> applyBossHitMessage(msg));
   activeRoom.onMessage('purgeFx', ()=> applyPurgeFxMessage());
+  activeRoom.onMessage('pickupSpawn', (msg)=> applyPickupSpawnMessage(msg));
+  activeRoom.onMessage('pickupCollect', (msg)=> applyPickupCollectMessage(msg));
+  activeRoom.onMessage('pickupClear', ()=> applyPickupClearMessage());
   activeRoom.onMessage('hostMigrated', (msg)=>{
     const wasHost = state.isHost;
     state.isHost = (msg && msg.hostId === state.mySessionId);

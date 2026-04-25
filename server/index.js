@@ -90,6 +90,22 @@ class GameRoom extends colyseus.Room {
       this.broadcast("purgeFx", payload || {}, { except: client });
     });
 
+    // ---- Pickups (God Mode floor + boss-skill drops) ----
+    // Host is authoritative for spawning. Anyone (host or joiner) may collect
+    // and announces it so every other client removes the floor sprite.
+    this.onMessage("pickupSpawn", (client, payload) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("pickupSpawn", payload, { except: client });
+    });
+    this.onMessage("pickupCollect", (client, payload) => {
+      if (this.state.phase !== "in-game") return;
+      this.broadcast("pickupCollect", { ...(payload || {}), by: client.sessionId }, { except: client });
+    });
+    this.onMessage("pickupClear", (client) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("pickupClear", {}, { except: client });
+    });
+
     // Revive: forward to everyone (including host) so the downed player can
     // be brought back up. Host applies it authoritatively for enemies; the
     // downed client re-enables their own controls when they receive it.
