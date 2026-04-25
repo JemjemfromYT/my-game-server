@@ -1124,6 +1124,45 @@ function castPlayerBossSkill(p){
   bs.cd = bs.cdMax * (p.mods && p.mods.cdr ? p.mods.cdr : 1);
   try{ SFX.ability(p.heroId); }catch(e){}
   particles(p.x, p.y, col, 28, 260, 0.5, 3);
+  // Broadcast cast to other players so they see the visual effect.
+  if(isMultiMode() && activeRoom){
+    try{ activeRoom.send('playerSkillCast', { skillId: bs.id, x: p.x|0, y: p.y|0, angle: +ang.toFixed(3), color: col }); }catch(e){}
+  }
+}
+
+// Visual-only replay of a remote player's boss-skill cast.
+// No damage, no bullets — just rings and particles so both players see the effect.
+function applyRemotePlayerSkillCast(msg){
+  if(!msg) return;
+  const x = msg.x, y = msg.y, ang = msg.angle || 0, col = msg.color || '#ffd166';
+  const id = msg.skillId || '';
+  // Generic cast flash present for every skill
+  particles(x, y, col, 28, 260, 0.5, 3);
+  state.fx.push({ring:true, x, y, color:col, life:0.5, life0:0.5, r:0, _maxR:120});
+  // Skill-specific visual additions
+  if(id === 'void_zone'){
+    const zx = x + Math.cos(ang)*180, zy = y + Math.sin(ang)*180;
+    state.fx.push({ring:true, x:zx, y:zy, color:col, life:3.0, life0:3.0, r:120, _maxR:120});
+    particles(zx, zy, col, 30, 220, 0.7, 3);
+  } else if(id === 'meteor_rain'){
+    for(let i=0;i<3;i++){
+      const tx = x + Math.cos(ang)*120 + (Math.random()*220-110);
+      const ty = y + Math.sin(ang)*120 + (Math.random()*220-110);
+      const delay = 350 + i*180;
+      state.fx.push({ring:true, x:tx, y:ty, color:col, life:delay/1000, life0:delay/1000, r:60, _maxR:60});
+      setTimeout(()=>{ state.fx.push({ring:true, x:tx, y:ty, color:col, life:0.4, life0:0.4, r:0, _maxR:90}); particles(tx, ty, col, 30, 260, 0.6, 3); }, delay);
+    }
+  } else if(id === 'gravity_well'){
+    for(let i=0;i<2;i++){
+      const sx = x + Math.cos(ang + (i?0.6:-0.6))*200, sy = y + Math.sin(ang + (i?0.6:-0.6))*200;
+      state.fx.push({ring:true, x:sx, y:sy, color:col, life:0.5, life0:0.5, r:80, _maxR:80});
+      setTimeout(()=>{ state.fx.push({ring:true, x:sx, y:sy, color:col, life:0.4, life0:0.4, r:0, _maxR:120}); particles(sx, sy, col, 30, 260, 0.6, 3); }, 500);
+    }
+  } else if(id === 'dash_strike'){
+    state.fx.push({ring:true, x:x+Math.cos(ang)*180, y:y+Math.sin(ang)*180, color:col, life:0.4, life0:0.4, r:0, _maxR:90});
+  } else if(id === 'chain_lightning'){
+    state.fx.push({ring:true, x, y, color:col, life:0.3, life0:0.3, r:0, _maxR:80});
+  }
 }
 
 function damageEnemy(e,dmg,p){
@@ -3867,20 +3906,30 @@ $('#mpBack').onclick = ()=> setScene('menu');
 
 $('#btnQuick').onclick = ()=>{
   setScene('heroSelect'); renderHeroGrid();
-  $('#heroConfirm').onclick = async ()=>{ await quickJoinPublic(); };
+  $('#heroConfirm').disabled = false;
+  $('#heroConfirm').onclick = async ()=>{
+    const btn = $('#heroConfirm'); btn.disabled = true;
+    try{ await quickJoinPublic(); } catch(e){ btn.disabled = false; throw e; }
+  };
 };
 $('#btnCreate').onclick = ()=>{
   setScene('heroSelect'); renderHeroGrid();
+  $('#heroConfirm').disabled = false;
   $('#heroConfirm').onclick = async ()=>{
-    await joinRoom('battle_room', {});
-    if(activeRoom) toast('Room created: '+activeRoom.id, 3000);
+    const btn = $('#heroConfirm'); btn.disabled = true;
+    try{
+      await joinRoom('battle_room', {});
+      if(activeRoom) toast('Room created: '+activeRoom.id, 3000);
+    } catch(e){ btn.disabled = false; throw e; }
   };
 };
 $('#btnJoin').onclick = ()=>{
   const code = $('#roomCode').value.trim();
   if(!code){ toast('Enter a room code'); return; }
   setScene('heroSelect'); renderHeroGrid();
+  $('#heroConfirm').disabled = false;
   $('#heroConfirm').onclick = async ()=>{
+    const btn = $('#heroConfirm'); btn.disabled = true;
     try{
       if(activeRoom){ try{ await activeRoom.leave(); }catch(e){} activeRoom=null; }
       activeRoom = await client.joinById(code, { name: state.username || 'Operator', heroId: state.hero });
@@ -3891,7 +3940,7 @@ $('#btnJoin').onclick = ()=>{
       $('#lobbyCode').textContent = '· '+activeRoom.id;
     } catch(e){
       console.warn('joinById failed, falling back:', e.message);
-      await joinRoom('battle_room', {});
+      try{ await joinRoom('battle_room', {}); } catch(e2){ btn.disabled = false; }
     }
   };
 };
@@ -3954,6 +4003,7 @@ function bindRoomHandlers(){
   activeRoom.onMessage('pickupSpawn', (msg)=> applyPickupSpawnMessage(msg));
   activeRoom.onMessage('pickupCollect', (msg)=> applyPickupCollectMessage(msg));
   activeRoom.onMessage('pickupClear', ()=> applyPickupClearMessage());
+  activeRoom.onMessage('playerSkillCast', (msg)=> applyRemotePlayerSkillCast(msg));
   activeRoom.onMessage('hostMigrated', (msg)=>{
     const wasHost = state.isHost;
     state.isHost = (msg && msg.hostId === state.mySessionId);

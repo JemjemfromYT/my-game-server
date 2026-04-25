@@ -113,6 +113,13 @@ class GameRoom extends colyseus.Room {
       this.broadcast("revive", { from: client.sessionId, ...(payload || {}) });
     });
 
+    // Player boss-skill cast visuals: relay to all other clients so they
+    // can render the effect on the caster's position.
+    this.onMessage("playerSkillCast", (client, payload) => {
+      if (this.state.phase !== "in-game") return;
+      this.broadcast("playerSkillCast", { ...(payload || {}), from: client.sessionId }, { except: client });
+    });
+
     // Game over / return to lobby — resets phase and ready flags so a new
     // game can be started without everyone needing to reconnect.
     this.onMessage("gameEnd", (client) => {
