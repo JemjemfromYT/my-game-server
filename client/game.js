@@ -14,28 +14,43 @@ window.onunhandledrejection = (event) => console.error("ASYNC ERROR:", event.rea
 
 // ---------- Hero defs ----------
 const HEROES = {
-  james: { name:"James", role:"Sword Tank",   img:"heroes/james.png",  hp:180, speed:250, dmg:34, atkCd:0.45, range:120,  abi:"Whirlwind",   abiCd:7,  color:"#22e8ff", desc:"High HP melee bruiser. Strong cleaving sword and a 360° whirlwind that staggers and damages." },
+  james: { name:"James", role:"Sword Tank",   img:"heroes/james.png",  hp:180, speed:200, dmg:34, atkCd:0.45, range:62,  abi:"Whirlwind",   abiCd:7,  color:"#22e8ff", desc:"High HP melee bruiser. Strong cleaving sword and a 360° whirlwind that staggers and damages." },
   jake:  { name:"Jake",  role:"Wand Mage",    img:"heroes/jake.png",   hp:95,  speed:215, dmg:22, atkCd:0.85, range:520, abi:"Arcane Nova", abiCd:8,  color:"#ff2bd6", desc:"Slow, powerful magic missiles. Q unleashes a violet nova that detonates outward in a ring." },
   joross:{ name:"Joross",role:"Plasma Gunner",img:"heroes/joross.png", hp:70, speed:225, dmg:9,  atkCd:0.10, range:480, abi:"Suppress",    abiCd:6,  color:"#ff8a3d", desc:"Continuous plasma fire. Q triples fire-rate for 3s and pierces lightly armored foes." },
   jeb:   { name:"Jeb",   role:"Cross Healer", img:"heroes/jeb.png",    hp:110, speed:215, dmg:14, atkCd:0.55, range:380, abi:"Sanctum",     abiCd:9,  color:"#3dffb0", desc:"Holy bolts and a healing zone." },
-  jeff:  { name:"Jeff",  role:"Assassin",     img:"heroes/jeff.png",   hp:70,  speed:300, dmg:50, atkCd:0.35, range:80,  abi:"Phase Slash", abiCd:5,  color:"#ff3d6a", desc:"Glass cannon. Tiny HP, blinding speed, lethal twin daggers." },
+  jeff:  { name:"Jeff",  role:"Assassin",     img:"heroes/jeff.png",   hp:70,  speed:285, dmg:48, atkCd:0.35, range:48,  abi:"Phase Slash", abiCd:5,  color:"#ff3d6a", desc:"Glass cannon. Tiny HP, blinding speed, lethal twin daggers." },
 };
 const HERO_IDS = Object.keys(HEROES);
 
 // ---------- Upgrades (used by classic mode + god-mode pickups) ----------
+// Each upgrade is also a possible floor drop in God Mode. To make drops feel
+// more varied, an upgrade can declare an optional `color` used by the pickup
+// sprite — falls back to the default amber if missing.
 const UPGRADES = [
-  { id:"speed", name:"Neon Sprint", desc:"+15% movement speed.", apply:p=>p.mods.speed*=1.15 },
-  { id:"cdr",   name:"Overclock",   desc:"-20% all cooldowns.",  apply:p=>{p.mods.cdr*=0.8} },
-  { id:"shield",name:"Phase Shield",desc:"+40 HP regenerating shield.", apply:p=>{p.mods.shieldMax+=40; p.shield=p.mods.shieldMax} },
-  { id:"aura",  name:"Damage Aura", desc:"Burn nearby enemies for 12 dps.", apply:p=>{p.mods.aura+=12} },
-  { id:"slow",  name:"Time Dilation", desc:"Slow nearby enemies by 25%.", apply:p=>{p.mods.slow=Math.min(0.6, p.mods.slow+0.25)} },
-  { id:"regen", name:"Bio-Weave",  desc:"Regenerate 4 HP/s.", apply:p=>{p.mods.regen+=4} },
-  { id:"weapon",name:"Weapon Tuning", desc:"+25% damage, +10% range.", apply:p=>{p.mods.dmg*=1.25; p.mods.range*=1.10} },
-  { id:"firerate", name:"Trigger Discipline", desc:"+25% attack speed.", apply:p=>{p.mods.atkSpd*=1.25} },
-  { id:"vamp", name:"Vampiric Edge", desc:"Heal 8% of damage dealt.", apply:p=>{p.mods.lifesteal+=0.08} },
-  { id:"heal", name:"Stim Shot", desc:"Restore 50% HP instantly.", apply:p=>{ p.hp = Math.min(p.hpMax, p.hp + p.hpMax*0.5); } },
-  { id:"berserk", name:"Berserker Pulse", desc:"+40% damage for the next phase.", apply:p=>{ p.mods.dmg*=1.4; } },
-  { id:"hpmax", name:"Neural Lattice", desc:"+30 max HP and full heal.", apply:p=>{ p.hpMax+=30; p.hp=p.hpMax; } },
+  { id:"speed", name:"Neon Sprint", desc:"+15% movement speed.", color:'#3dffb0', apply:p=>p.mods.speed*=1.15 },
+  { id:"cdr",   name:"Overclock",   desc:"-20% all cooldowns.",  color:'#22e8ff', apply:p=>{p.mods.cdr*=0.8} },
+  { id:"shield",name:"Phase Shield",desc:"+40 HP regenerating shield.", color:'#9d5cff', apply:p=>{p.mods.shieldMax+=40; p.shield=p.mods.shieldMax} },
+  { id:"aura",  name:"Damage Aura", desc:"Burn nearby enemies for 12 dps.", color:'#ff8a3d', apply:p=>{p.mods.aura+=12} },
+  { id:"slow",  name:"Time Dilation", desc:"Slow nearby enemies by 25%.", color:'#7ec8ff', apply:p=>{p.mods.slow=Math.min(0.6, p.mods.slow+0.25)} },
+  { id:"regen", name:"Bio-Weave",  desc:"Regenerate 4 HP/s.", color:'#7dff7d', apply:p=>{p.mods.regen+=4} },
+  { id:"weapon",name:"Weapon Tuning", desc:"+25% damage, +10% range.", color:'#ff5577', apply:p=>{p.mods.dmg*=1.25; p.mods.range*=1.10} },
+  { id:"firerate", name:"Trigger Discipline", desc:"+25% attack speed.", color:'#ffd166', apply:p=>{p.mods.atkSpd*=1.25} },
+  { id:"vamp", name:"Vampiric Edge", desc:"Heal 8% of damage dealt.", color:'#ff4060', apply:p=>{p.mods.lifesteal+=0.08} },
+  { id:"heal", name:"Stim Shot", desc:"Restore 50% HP instantly.", color:'#ff9eb8', apply:p=>{ p.hp = Math.min(p.hpMax, p.hp + p.hpMax*0.5); } },
+  { id:"berserk", name:"Berserker Pulse", desc:"+40% damage for the next phase.", color:'#ff2bd6', apply:p=>{ p.mods.dmg*=1.4; } },
+  { id:"hpmax", name:"Neural Lattice", desc:"+30 max HP and full heal.", color:'#ffe07a', apply:p=>{ p.hpMax+=30; p.hp=p.hpMax; } },
+  // ===== NEW DROP TYPES =====
+  { id:"sniper",     name:"Sniper Coil",   desc:"+60% range, +10% damage.",          color:'#22ffe8', apply:p=>{ p.mods.range*=1.60; p.mods.dmg*=1.10; } },
+  { id:"hyperedge",  name:"Hyper Edge",    desc:"+50% damage.",                       color:'#ff3b3b', apply:p=>{ p.mods.dmg*=1.50; } },
+  { id:"ironwill",   name:"Iron Will",     desc:"+50 max HP.",                         color:'#ffce5c', apply:p=>{ p.hpMax+=50; p.hp=Math.min(p.hpMax, p.hp+50); } },
+  { id:"phoenix",    name:"Phoenix Pact",  desc:"+20 max HP and full heal.",           color:'#ff7755', apply:p=>{ p.hpMax+=20; p.hp=p.hpMax; } },
+  { id:"aegis",      name:"Aegis Pulse",   desc:"+60 instant shield (one-time).",      color:'#a3c9ff', apply:p=>{ p.shield=Math.min((p.mods.shieldMax||0)+60, (p.shield||0)+60); if(p.mods.shieldMax<60) p.mods.shieldMax=60; } },
+  { id:"frostbite",  name:"Frostbite Aura",desc:"+15% slow on nearby enemies.",        color:'#9ee8ff', apply:p=>{ p.mods.slow=Math.min(0.6, p.mods.slow+0.15); } },
+  { id:"plasmahalo", name:"Plasma Halo",   desc:"+18 dps damage aura.",                color:'#ffaa3d', apply:p=>{ p.mods.aura+=18; } },
+  { id:"adrenaline", name:"Adrenaline",    desc:"+20% atk speed, -10% cooldowns.",     color:'#ffe066', apply:p=>{ p.mods.atkSpd*=1.20; p.mods.cdr*=0.90; } },
+  { id:"swift",      name:"Burst Sprint",  desc:"+25% move speed.",                    color:'#5dffd0', apply:p=>{ p.mods.speed*=1.25; } },
+  { id:"bloodpact",  name:"Blood Pact",    desc:"+12% lifesteal.",                     color:'#cc1140', apply:p=>{ p.mods.lifesteal+=0.12; } },
+  { id:"glasscannon",name:"Glass Cannon",  desc:"+70% damage, -20% max HP.",           color:'#ff2bd6', apply:p=>{ p.mods.dmg*=1.70; p.hpMax=Math.max(20, Math.floor(p.hpMax*0.80)); p.hp=Math.min(p.hpMax, p.hp); } },
 ];
 
 // ---------- Globals ----------
@@ -115,6 +130,7 @@ const BOSS_SKILLS_LIST = [
   'shadow_clones_assault',   // 4 shadow clones each cast a beam at player (boss_shadow_clones_assault.mp3)
   'time_freeze_pulse',       // brief slow-field on player + ring of bullets (boss_time_freeze_pulse.mp3)
   'nova_implosion',          // implode-then-explode 360° projectile blast (boss_nova_implosion.mp3)
+  'radial_collapse',         // light-weight nova replacement for phase 10  (boss_radial_collapse.mp3)
   // ===== NEW PHASE-11 NINJA SKILLS — supply matching .mp3 files =====
   'phantom_step',            // chain blink-slash around the player, untouchable mid-blink (boss_phantom_step.mp3)
   'shuriken_storm',          // expanding swirl of curving shuriken in waves         (boss_shuriken_storm.mp3)
@@ -166,7 +182,7 @@ const BOSS_PHASES = [
     skills:['telegraph_beam','shockwave','dash_strike','teleport_strike','homing_orbs','laser_sweep','chain_lightning','gravity_well','meteor_rain','shadow_clones_assault','time_freeze_pulse'] },
   { name:"OMEGA — The Last God",title:"BURN OR BE REMEMBERED", color:"#ff2bd6", arenaTint:"rgba(255,43,214,.22)",
     hpMul: 36.0, radius: 270, music:"boss10", signature:'reality_break',
-    skills:['telegraph_beam','shockwave','dash_strike','teleport_strike','clone_split','void_zone','meteor_rain','laser_sweep','chain_lightning','gravity_well','reality_break','summon_minions','bullet_spiral','homing_orbs','ground_spikes','prismatic_burst','shadow_clones_assault','time_freeze_pulse','nova_implosion'] },
+    skills:['telegraph_beam','shockwave','dash_strike','teleport_strike','clone_split','void_zone','meteor_rain','laser_sweep','chain_lightning','gravity_well','reality_break','summon_minions','bullet_spiral','homing_orbs','ground_spikes','prismatic_burst','shadow_clones_assault','time_freeze_pulse','radial_collapse'] },
   // ----- Phase 11: humanoid god-form (ninja/assassin) -----
   // After OMEGA falls, the divine essence reforges into a slim humanoid
   // avatar — high movement speed, micro-blinks, and brief untouchable
@@ -203,7 +219,33 @@ const PLAYER_BOSS_SKILL_INFO = {
 // Each pickup maps to one of the existing UPGRADES, gets a glyph color,
 // and triggers the "collect.mp3" sfx + cinematic banner on pickup.
 const PICKUP_RADIUS = 22;
-const PICKUP_SPAWN_INTERVAL = 11; // seconds between drops (faster than upgrade picks)
+// Drop cadence — slower than the previous patch so the floor isn't littered.
+const PICKUP_SPAWN_INTERVAL = 14;    // was 5 — much less frequent
+const PICKUP_SPAWN_JITTER   = 4;     // was 1.5 — wider random gap on top
+const PICKUP_BASE_PER_CYCLE = 1;     // was 2 — back to one drop per cycle in solo
+
+// ---------- Drop rarity tiers ----------
+// Picked at spawn time by weighted random. `stacks` = how many times the
+// upgrade's effect is applied on collect, so legendary drops feel huge.
+// `ringWidth` and `ringColor` style the floor sprite, and `pillar` controls
+// the column-of-light fx so rare+ drops are visible from far away.
+const RARITY_TIERS = [
+  // Heavily nerfed: epic and legendary are now true scores. ~85% common.
+  { id:'common',    label:'Common',    weight:850, stacks:1, ringColor:'#ffffff', ringWidth:1.5, pillar:false, sparkles:false, banner:'',           color:'#ffffff' },
+  { id:'rare',      label:'Rare',      weight:130, stacks:2, ringColor:'#5dafff', ringWidth:2.5, pillar:true,  sparkles:false, banner:'★★ RARE',     color:'#5dafff' },
+  { id:'epic',      label:'Epic',      weight:18,  stacks:3, ringColor:'#c46bff', ringWidth:3.0, pillar:true,  sparkles:true,  banner:'★★★ EPIC',   color:'#c46bff' },
+  { id:'legendary', label:'Legendary', weight:2,   stacks:4, ringColor:'#ffb347', ringWidth:3.5, pillar:true,  sparkles:true,  banner:'★★★★ LEGENDARY', color:'#ffb347' },
+];
+const RARITY_TOTAL_WEIGHT = RARITY_TIERS.reduce((s,r)=>s+r.weight, 0);
+function rollRarity(){
+  let n = Math.random() * RARITY_TOTAL_WEIGHT;
+  for(const r of RARITY_TIERS){ n -= r.weight; if(n <= 0) return r; }
+  return RARITY_TIERS[0];
+}
+function getRarity(id){ return RARITY_TIERS.find(r=>r.id===id) || RARITY_TIERS[0]; }
+// Some upgrades are flat one-shots that would be silly to stack 4×. For
+// these, rarity grants a flat bonus instead of running apply() N times.
+const NO_STACK_UPGRADES = new Set(['heal','phoenix','glasscannon','aegis','ironwill','hpmax']);
 
 // ---------- SFX engine ----------
 const SFX = (() => {
@@ -1151,10 +1193,39 @@ function updatePickups(dt){
         shake(10);
       } else {
         const upg = UPGRADES.find(u=>u.id===pk.id) || UPGRADES[0];
-        try{ upg.apply(p); }catch(e){}
+        const rarity = getRarity(pk.rarity);
+        try {
+          if(NO_STACK_UPGRADES.has(upg.id)){
+            // Run apply once, then award a flat rarity bonus on top.
+            upg.apply(p);
+            const bonus = rarity.stacks - 1;
+            if(bonus > 0){
+              if(upg.id === 'heal' || upg.id === 'phoenix'){
+                p.hpMax += 10 * bonus; p.hp = p.hpMax;
+              } else if(upg.id === 'aegis'){
+                p.shield = (p.shield||0) + 30 * bonus;
+                if(p.mods.shieldMax < p.shield) p.mods.shieldMax = p.shield;
+              } else if(upg.id === 'ironwill' || upg.id === 'hpmax'){
+                p.hpMax += 25 * bonus; p.hp = Math.min(p.hpMax, p.hp + 25 * bonus);
+              } else if(upg.id === 'glasscannon'){
+                // legendary glass cannon: extra +30% dmg per tier, no extra HP loss
+                p.mods.dmg *= (1 + 0.30 * bonus);
+              }
+            }
+          } else {
+            for(let s=0; s<rarity.stacks; s++) upg.apply(p);
+          }
+        } catch(e){}
         SFX.collect();
-        showPickupBanner(upg.name, upg.desc);
-        particles(pk.x, pk.y, '#ffd166', 30, 280, 0.8, 3);
+        const namePrefix = rarity.banner ? `${rarity.banner} — ` : '';
+        showPickupBanner(namePrefix + upg.name, upg.desc);
+        const pColor = rarity.id === 'common' ? (upg.color || '#ffd166') : rarity.color;
+        const pN = rarity.id === 'common' ? 30 : (rarity.id === 'rare' ? 50 : (rarity.id === 'epic' ? 80 : 130));
+        particles(pk.x, pk.y, pColor, pN, 320, 0.9, 3);
+        if(rarity.id !== 'common'){
+          state.fx.push({ring:true, x:pk.x, y:pk.y, color:rarity.color, life:0.5, life0:0.5, r:0, _maxR: rarity.id === 'legendary' ? 180 : 110});
+          if(rarity.id === 'legendary') shake(8); else if(rarity.id === 'epic') shake(4);
+        }
       }
     }
   }
@@ -1346,10 +1417,10 @@ const GOD = (() => {
         // Scale floor-pickup drops with player count: more players → more drops
         // per cycle AND a slightly faster cycle. Solo behavior is unchanged.
         const playerCount = 1 + state.others.size;
-        const drops = playerCount;
+        const drops = PICKUP_BASE_PER_CYCLE + (playerCount - 1);
         for(let i=0;i<drops;i++) spawnPickup();
         const intervalMul = 1 / Math.max(1, Math.sqrt(playerCount));
-        g.pickupTimer = PICKUP_SPAWN_INTERVAL * intervalMul + Math.random()*3;
+        g.pickupTimer = PICKUP_SPAWN_INTERVAL * intervalMul + Math.random()*PICKUP_SPAWN_JITTER;
       }
     }
   }
@@ -1716,31 +1787,34 @@ const GOD = (() => {
         break;
       }
       case 'chain_lightning': {
-        // More bolts, wider, hits harder, and a delayed second arc at high phases.
+        // NERFED: fewer bolts, lower per-bolt damage, and the second arc only
+        // appears at very high phases. Boss chain lightning was hitting too
+        // hard — now it's a threat instead of a one-shot.
         const ph = state.god.phase;
         const p = state.player; if(!p) break;
-        const bolts = 5 + Math.min(8, ph);
-        const beamW = 16 + Math.min(20, ph*2);
-        const dmg = 12 + ph*3;
+        const bolts = 3 + Math.min(4, Math.floor(ph/2));   // was 5 + min(8, ph)
+        const beamW = 12 + Math.min(12, ph);                // was 16 + min(20, ph*2)
+        const dmg = 6 + ph*1.5;                             // was 12 + ph*3
         let prevX = boss.x, prevY = boss.y;
         for(let i=0;i<bolts;i++){
-          const tx = p.x + (Math.random()-0.5)*220;
-          const ty = p.y + (Math.random()-0.5)*220;
+          const tx = p.x + (Math.random()-0.5)*240;
+          const ty = p.y + (Math.random()-0.5)*240;
           state.fx.push({beam:true, ax:prevX, ay:prevY, bx:tx, by:ty, color:'#ffd166', life:0.5, life0:0.5, beamFireAt:0.45, beamWidth:beamW, dmg});
           prevX = tx; prevY = ty;
         }
-        if(ph >= 6){
+        // Second arc only at phase 9+, and weaker than before.
+        if(ph >= 9){
           _schedule(()=>{
             if(!boss || boss.dead) return;
             const pp = state.player; if(!pp) return;
             let px = boss.x, py = boss.y;
             for(let i=0;i<bolts;i++){
-              const tx = pp.x + (Math.random()-0.5)*240;
-              const ty = pp.y + (Math.random()-0.5)*240;
-              state.fx.push({beam:true, ax:px, ay:py, bx:tx, by:ty, color:'#ffd166', life:0.45, life0:0.45, beamFireAt:0.40, beamWidth:beamW, dmg:dmg+4});
+              const tx = pp.x + (Math.random()-0.5)*260;
+              const ty = pp.y + (Math.random()-0.5)*260;
+              state.fx.push({beam:true, ax:px, ay:py, bx:tx, by:ty, color:'#ffd166', life:0.45, life0:0.45, beamFireAt:0.40, beamWidth:beamW, dmg:dmg+1});
               px = tx; py = ty;
             }
-          }, 600);
+          }, 700);
         }
         break;
       }
@@ -1898,6 +1972,72 @@ const GOD = (() => {
           }, 350);
         }
         state.fx.push({_flash:true, life:0.35, life0:0.35, color:'#22e8ff'});
+        break;
+      }
+      case 'radial_collapse': {
+        // OPTIMIZED nova replacement (used on phase 10). Same implode→explode
+        // *feeling* as nova_implosion but spawns ZERO bullets — just a few
+        // ring fx + telegraphed beam spokes + 2 timed damage bands. Cheap.
+        const ph = state.god.phase;
+        const dmgIn  = (32 + ph*3) * BOSS_DMG_MUL;
+        const dmgOut = (28 + ph*3) * BOSS_DMG_MUL;
+        const ringR  = 360 + ph*8;
+        const implodeMs = 850;
+        // 1) Implosion telegraph: contracting ring + 6 warning spokes.
+        state.fx.push({ring:true, x:boss.x, y:boss.y, color:col, life:implodeMs/1000, life0:implodeMs/1000, r:ringR, _maxR:ringR, _shrink:true, _bossRef:boss});
+        const spokes = 6;
+        for(let i=0;i<spokes;i++){
+          const ang = (i/spokes)*Math.PI*2;
+          const ax = boss.x, ay = boss.y;
+          const bx = boss.x + Math.cos(ang)*ringR;
+          const by = boss.y + Math.sin(ang)*ringR;
+          state.fx.push({warn:true, ax,ay,bx,by, color:col, life:implodeMs/1000, life0:implodeMs/1000, beamWidth:14});
+        }
+        // 2) Implosion hit: damage anyone close to boss.
+        _schedule(()=>{
+          if(!boss || boss.dead) return;
+          shake(10);
+          state.fx.push({_flash:true, life:0.25, life0:0.25, color:col});
+          state.fx.push({ring:true, x:boss.x, y:boss.y, color:col, life:0.35, life0:0.35, r:0, _maxR:120});
+          const pp = state.player;
+          if(pp && pp.alive && !pp.downed){
+            const d = Math.hypot(pp.x-boss.x, pp.y-boss.y);
+            if(d < 110){
+              let rem = dmgIn;
+              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
+              pp.hp -= rem; SFX.hurt();
+            }
+          }
+        }, implodeMs);
+        // 3) Outward shockwave: single big expanding ring + 2 timed damage
+        // bands at known radii. No bullets — much lighter than nova.
+        const explodeAt = implodeMs + 120;
+        const finalR = 380 + ph*16;
+        _schedule(()=>{
+          if(!boss || boss.dead) return;
+          shake(16);
+          state.fx.push({_flash:true, life:0.40, life0:0.40, color:col});
+          state.fx.push({ring:true, x:boss.x, y:boss.y, color:col, life:0.85, life0:0.85, r:0, _maxR:finalR});
+          // Slim outer halo for extra readability without extra bullets.
+          state.fx.push({ring:true, x:boss.x, y:boss.y, color:'#ffffff', life:0.65, life0:0.65, r:0, _maxR:finalR*0.92});
+        }, explodeAt);
+        // Two bands: inner band ~250ms after explosion, outer ~550ms.
+        const checkBand = (delay, rMin, rMax)=>{
+          _schedule(()=>{
+            if(!boss || boss.dead) return;
+            const pp = state.player;
+            if(!pp || !pp.alive || pp.downed) return;
+            const d = Math.hypot(pp.x-boss.x, pp.y-boss.y);
+            if(d >= rMin && d <= rMax){
+              let rem = dmgOut;
+              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
+              pp.hp -= rem; SFX.hurt();
+              particles(pp.x, pp.y, col, 18, 220, 0.5, 3);
+            }
+          }, delay);
+        };
+        checkBand(explodeAt + 240, 100, finalR*0.55);
+        checkBand(explodeAt + 540, finalR*0.50, finalR);
         break;
       }
       case 'nova_implosion': {
@@ -2107,9 +2247,18 @@ const GOD = (() => {
     const x = 120 + Math.random()*(a.w-240);
     const y = 120 + Math.random()*(a.h-240);
     const upg = UPGRADES[Math.floor(Math.random()*UPGRADES.length)];
-    state.pickups.push({ id:upg.id, name:upg.name, x, y, t:0 });
-    // Soft sparkle on appear
-    particles(x, y, '#ffd166', 12, 140, 0.6, 2);
+    const rarity = rollRarity();
+    state.pickups.push({ id:upg.id, name:upg.name, rarity:rarity.id, x, y, t:0 });
+    // Spawn fx scales with rarity — legendary is unmissable.
+    const sparkColor = rarity.id === 'common' ? (upg.color || '#ffd166') : rarity.color;
+    const sparkN = rarity.id === 'common' ? 12 : (rarity.id === 'rare' ? 24 : (rarity.id === 'epic' ? 40 : 70));
+    const sparkSpd = rarity.id === 'common' ? 140 : 240;
+    particles(x, y, sparkColor, sparkN, sparkSpd, 0.7, 2);
+    if(rarity.id !== 'common'){
+      // Drop-in shockwave ring so the player notices a special drop landing.
+      const r0 = rarity.id === 'legendary' ? 110 : (rarity.id === 'epic' ? 80 : 55);
+      state.fx.push({ring:true, x, y, color:rarity.color, life:0.55, life0:0.55, r:0, _maxR:r0});
+    }
   }
 
   // Special drop: when a boss dies, drop a fragment of its signature skill.
@@ -2252,14 +2401,57 @@ function render(){
       }
       ctx.closePath(); ctx.stroke();
     } else {
-      ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 24;
-      ctx.fillStyle = withAlpha('#ffd166', 0.25);
+      // Color-coded drop: each upgrade type has its own glow color so the
+      // player can tell at a glance what's on the floor. The OUTER ring +
+      // optional pillar of light are tinted by RARITY so rare+ drops pop.
+      const upgDef = UPGRADES.find(u=>u.id===pk.id);
+      const c = (upgDef && upgDef.color) ? upgDef.color : '#ffd166';
+      const rarity = getRarity(pk.rarity);
+      const isCommon = rarity.id === 'common';
+      // Pillar of light for rare+ drops — vertical taper above the pickup.
+      if(rarity.pillar){
+        const pillarH = rarity.id === 'legendary' ? 220 : (rarity.id === 'epic' ? 160 : 110);
+        const pillarW = rarity.id === 'legendary' ? 30 : (rarity.id === 'epic' ? 22 : 16);
+        const grad = ctx.createLinearGradient(0, -pillarH, 0, 0);
+        grad.addColorStop(0,    withAlpha(rarity.color, 0));
+        grad.addColorStop(0.55, withAlpha(rarity.color, 0.22 + 0.10*Math.sin(pk.t*3)));
+        grad.addColorStop(1,    withAlpha(rarity.color, 0.55));
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(-pillarW*0.25, -pillarH);
+        ctx.lineTo( pillarW*0.25, -pillarH);
+        ctx.lineTo( pillarW*0.5,    0);
+        ctx.lineTo(-pillarW*0.5,    0);
+        ctx.closePath();
+        ctx.fill();
+      }
+      // Ambient sparkles for epic/legendary
+      if(rarity.sparkles && Math.random() < (rarity.id === 'legendary' ? 0.5 : 0.25)){
+        particles(pk.x, pk.y - 10 - Math.random()*30, rarity.color, 1, 50, 0.5, 2);
+      }
+      // Inner glow + core dot (upgrade color)
+      ctx.shadowColor = c; ctx.shadowBlur = isCommon ? 24 : 32;
+      ctx.fillStyle = withAlpha(c, 0.25);
       ctx.beginPath(); ctx.arc(0,0,PICKUP_RADIUS*pulse,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle = '#ffd166';
+      ctx.fillStyle = c;
       ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      // Outer ring tinted by rarity, with extra rotating ring for epic+
+      ctx.strokeStyle = rarity.ringColor; ctx.lineWidth = rarity.ringWidth;
       ctx.beginPath(); ctx.arc(0,0,PICKUP_RADIUS,0,Math.PI*2); ctx.stroke();
+      if(!isCommon){
+        ctx.save();
+        ctx.rotate(pk.t * (rarity.id === 'legendary' ? 2.5 : 1.6));
+        ctx.strokeStyle = withAlpha(rarity.color, 0.85);
+        ctx.lineWidth = 1.8;
+        const seg = rarity.id === 'legendary' ? 4 : (rarity.id === 'epic' ? 3 : 2);
+        for(let i=0;i<seg;i++){
+          const a0 = (i/seg)*Math.PI*2;
+          const a1 = a0 + Math.PI*2/(seg*2);
+          ctx.beginPath(); ctx.arc(0,0,PICKUP_RADIUS+5, a0, a1); ctx.stroke();
+        }
+        ctx.restore();
+      }
     }
     ctx.restore();
   }
