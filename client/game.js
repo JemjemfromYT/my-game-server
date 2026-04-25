@@ -459,6 +459,19 @@ function initTouchUI(){
     reviveBtn.addEventListener('touchend',   up);
     reviveBtn.addEventListener('touchcancel',up);
   }
+  // Mobile Leave button — visible only while downed/dead. Wires to the same
+  // teardown the desktop top-right Leave button uses.
+  const leaveDownedBtn = document.getElementById('tLeaveDowned');
+  if(leaveDownedBtn){
+    const fire = e=>{
+      e.preventDefault();
+      leaveDownedBtn.classList.add('pressed');
+      try{ if(typeof clearInGameOverlays === 'function') clearInGameOverlays(); }catch(_){}
+      try{ if(typeof leaveLobby === 'function') leaveLobby('menu'); }catch(_){}
+    };
+    leaveDownedBtn.addEventListener('touchstart', fire, {passive:false});
+    leaveDownedBtn.addEventListener('click', fire);
+  }
   cvs.addEventListener('touchmove', e=>e.preventDefault(), {passive:false});
 }
 initTouchUI();
@@ -468,6 +481,13 @@ function updateTouchCooldownUI(p){
   const set = (id,cd,max)=>{ const el=document.getElementById(id); if(!el) return; const pct=max>0?Math.max(0,Math.min(100,(cd/max)*100)):0; el.style.setProperty('--cd', pct+'%'); el.classList.toggle('ready', cd<=0); };
   const h = HEROES[p.heroId];
   set('tAttack', p.atkCd, h.atkCd); set('tDash', p.dashCd, 2); set('tAbility', p.abiCd, h.abiCd);
+  // Mobile Leave button auto-appears whenever the local player can no longer
+  // play (downed in multi, or fully dead). Hidden again on respawn / revive.
+  const leaveDownedBtn = document.getElementById('tLeaveDowned');
+  if(leaveDownedBtn){
+    const showIt = !!(p.downed || !p.alive);
+    leaveDownedBtn.style.display = showIt ? '' : 'none';
+  }
   // Boss-skill button: only visible when the player has acquired one.
   const bsBtn = document.getElementById('tBossSkill');
   if(bsBtn){
@@ -3941,8 +3961,38 @@ $('#btnRestart').onclick = ()=>{
   else if(state.mode==='god') startGame('god');
   else startGame('single');
 };
-$('#btnHome').onclick = ()=> leaveLobby('menu');
-$('#btnLeaveGame').onclick = ()=>{ state.running=false; leaveLobby('menu'); };
+// Hide every transient in-game overlay so leftovers (wave banner, boss bar,
+// pickup toast, god intro, mobile boss-skill button, downed Leave button)
+// don't ghost on the menu after the player leaves the game.
+function clearInGameOverlays(){
+  state.running = false;
+  // Wave banner — kill its scheduled re-hide too, otherwise the timeout can
+  // re-show it after we've already left.
+  const wb = document.getElementById('waveBanner');
+  if(wb){ wb.classList.remove('show'); wb.style.display = 'none'; }
+  if(typeof showWaveBanner !== 'undefined' && showWaveBanner._t){
+    clearTimeout(showWaveBanner._t); showWaveBanner._t = null;
+  }
+  if(typeof showPickupBanner !== 'undefined' && showPickupBanner._t){
+    clearTimeout(showPickupBanner._t); showPickupBanner._t = null;
+  }
+  // God Mode chrome
+  try{ hideBossBar(); }catch(e){}
+  try{ hideGodIntro(); }catch(e){}
+  // Toasts / pickup popup
+  const pkt = document.getElementById('pickupToast'); if(pkt) pkt.classList.remove('show');
+  const tst = document.getElementById('toast'); if(tst) tst.style.display = 'none';
+  // Mobile downed Leave + revive prompt + boss-skill button
+  const tDown = document.getElementById('tLeaveDowned'); if(tDown) tDown.style.display = 'none';
+  const tRev  = document.getElementById('tRevive');      if(tRev)  tRev.style.display  = 'none';
+  const tBs   = document.getElementById('tBossSkill');   if(tBs)   tBs.style.display   = 'none';
+  // Upgrade modal (in case it's open)
+  const upg = document.getElementById('upgrade'); if(upg) upg.style.display = '';
+}
+
+$('#btnHome').onclick      = ()=>{ clearInGameOverlays(); leaveLobby('menu'); };
+$('#btnLeaveEnd').onclick  = ()=>{ clearInGameOverlays(); leaveLobby('menu'); };
+$('#btnLeaveGame').onclick = ()=>{ clearInGameOverlays(); leaveLobby('menu'); };
 
 // ---------- Boot / Preloader ----------
 async function bootPreload(){

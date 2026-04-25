@@ -1393,6 +1393,7 @@
           <div class="row">
             <button id="btnRestart" class="btn primary">Restart</button>
             <button id="btnHome" class="btn ghost">Main Menu</button>
+            <button id="btnLeaveEnd" class="btn ghost">Leave</button>
           </div>
         </div>
       </div>
@@ -1418,6 +1419,29 @@
             <div class="ring"></div>
           </div>
         </div>
+        <!-- Boss-skill button (the "F" key on desktop). Hidden until the
+             player picks up a boss-skill drop; updateTouchCooldownUI flips
+             display='' once p.bossSkill is set. -->
+        <div
+          class="tbtn ready"
+          id="tBossSkill"
+          style="
+            display: none;
+            border-color: rgba(255, 209, 102, 0.85);
+            box-shadow:
+              0 0 22px rgba(255, 209, 102, 0.55),
+              inset 0 0 14px rgba(255, 209, 102, 0.3);
+            background: radial-gradient(
+              circle at 30% 30%,
+              rgba(255, 209, 102, 0.35),
+              rgba(255, 110, 199, 0.18) 60%,
+              rgba(0, 0, 0, 0.6)
+            );
+          "
+        >
+          <span class="bsLabel">SKILL</span>
+          <div class="ring"></div>
+        </div>
         <div
           class="tbtn ready"
           id="tRevive"
@@ -1436,6 +1460,28 @@
           "
         >
           E
+          <div class="ring"></div>
+        </div>
+        <!-- Mobile Leave button — only visible while the local player is
+             downed / dead so the small top-right Leave isn't the only escape. -->
+        <div
+          class="tbtn ready"
+          id="tLeaveDowned"
+          style="
+            display: none;
+            border-color: rgba(255, 90, 110, 0.9);
+            box-shadow:
+              0 0 22px rgba(255, 90, 110, 0.55),
+              inset 0 0 14px rgba(255, 90, 110, 0.3);
+            background: radial-gradient(
+              circle at 30% 30%,
+              rgba(255, 90, 110, 0.35),
+              rgba(157, 92, 255, 0.18) 60%,
+              rgba(0, 0, 0, 0.6)
+            );
+          "
+        >
+          LEAVE
           <div class="ring"></div>
         </div>
       </div>
