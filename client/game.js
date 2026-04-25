@@ -1571,6 +1571,16 @@ const GOD = (() => {
       return;
     }
     // FIGHT phase
+    // Bar update needs to survive host migration: when the original host dies,
+    // the server promotes a joiner to host (server index.js migrateHost). That
+    // promoted client never ran spawnBoss() so g.boss is null — leaving the
+    // top-of-screen boss HP bar frozen even though damageEnemy is still
+    // decrementing the boss in state.enemies. Re-anchor g.boss here from the
+    // live enemy list so the bar always reflects the real fight.
+    if(!g.boss){
+      const liveBoss = state.enemies.find(en => en && en.isBoss);
+      if(liveBoss) g.boss = liveBoss;
+    }
     if(g.boss){
       updateBossBarFill(g.boss.hp, g.boss.hpMax);
     }
@@ -3947,6 +3957,18 @@ function bindRoomHandlers(){
     if(state.isHost && !wasHost){
       state.bullets = state.bullets.filter(b => b.owner !== state.player.id);
       toast('You are now the host', 1800);
+      // The promoted host inherited interpolated enemies but never ran
+      // spawnBoss(), so state.god.boss is null. Re-anchor it (and reset boss
+      // skill bookkeeping) so the boss HP bar keeps updating and the boss can
+      // continue using skills under the new authority.
+      if(isGodMode() && state.god){
+        const liveBoss = state.enemies.find(en => en && en.isBoss);
+        if(liveBoss){
+          state.god.boss = liveBoss;
+          state.god.skillCooldowns = state.god.skillCooldowns || {};
+          state.god.bossTelegraphCooldown = 1.5;
+        }
+      }
     }
   });
   activeRoom.onMessage('revive', (msg)=> handleReviveMessage(msg));
