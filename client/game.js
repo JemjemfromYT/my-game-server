@@ -1130,16 +1130,68 @@ function castPlayerBossSkill(p){
 }
 
 // Visual-only replay of a remote player's boss-skill cast.
-// No damage, no bullets — just rings and particles so both players see the effect.
+// Renders rings, particles AND ghost bullets/beams so every client sees the
+// same projectiles the caster sees. Ghost bullets carry no damage and are
+// owned by the remote player id, so they never collide with enemies and the
+// authoritative host's hit detection is unaffected.
 function applyRemotePlayerSkillCast(msg){
   if(!msg) return;
   const x = msg.x, y = msg.y, ang = msg.angle || 0, col = msg.color || '#ffd166';
   const id = msg.skillId || '';
+  const ownerId = msg.from || msg.ownerId || 'remote';
+  // Ghost-bullet helper — same visual params the caster used in
+  // castPlayerBossSkill, but ghosted so it only renders.
+  const gb = (vx, vy, radius, life, piercing) => {
+    spawnBullet({
+      x, y, vx, vy,
+      dmg: 0, owner: ownerId, color: col,
+      radius, life, piercing: piercing || 0,
+      ghost: true
+    });
+  };
   // Generic cast flash present for every skill
   particles(x, y, col, 28, 260, 0.5, 3);
   state.fx.push({ring:true, x, y, color:col, life:0.5, life0:0.5, r:0, _maxR:120});
   // Skill-specific visual additions
-  if(id === 'void_zone'){
+  if(id === 'prismatic_burst'){
+    for(let layer=0; layer<3; layer++){
+      setTimeout(()=>{
+        for(let i=0;i<8;i++){
+          const a=(i/8)*Math.PI*2 + layer*0.2;
+          gb(Math.cos(a)*340, Math.sin(a)*340, 6, 0.7, 1);
+        }
+      }, layer*120);
+    }
+  } else if(id === 'time_freeze_pulse'){
+    for(let i=0;i<12;i++){
+      const a=(i/12)*Math.PI*2;
+      gb(Math.cos(a)*300, Math.sin(a)*300, 7, 0.9, 0);
+    }
+    state.fx.push({ring:true, x, y, color:col, life:0.6, life0:0.6, r:0, _maxR:170});
+  } else if(id === 'nova_implosion'){
+    for(let i=0;i<10;i++){
+      const a=(i/10)*Math.PI*2;
+      gb(Math.cos(a)*380, Math.sin(a)*380, 8, 0.8, 1);
+    }
+    state.fx.push({ring:true, x, y, color:col, life:0.5, life0:0.5, r:0, _maxR:200});
+  } else if(id === 'shadow_clones_assault'){
+    for(let i=-1;i<=1;i++){
+      const a=ang + i*0.25;
+      gb(Math.cos(a)*640, Math.sin(a)*640, 9, 1.0, 3);
+    }
+  } else if(id === 'reality_break'){
+    for(let i=0;i<12;i++){
+      const a=(i/12)*Math.PI*2;
+      gb(Math.cos(a)*360, Math.sin(a)*360, 7, 0.8, 1);
+    }
+    for(let i=0;i<3;i++){
+      const tx = x + (Math.random()*280-140);
+      const ty = y + (Math.random()*280-140);
+      const delay = 350 + i*180;
+      state.fx.push({ring:true, x:tx, y:ty, color:col, life:delay/1000, life0:delay/1000, r:60, _maxR:60});
+      setTimeout(()=>{ state.fx.push({ring:true, x:tx, y:ty, color:col, life:0.4, life0:0.4, r:0, _maxR:90}); }, delay);
+    }
+  } else if(id === 'void_zone'){
     const zx = x + Math.cos(ang)*180, zy = y + Math.sin(ang)*180;
     state.fx.push({ring:true, x:zx, y:zy, color:col, life:3.0, life0:3.0, r:120, _maxR:120});
     particles(zx, zy, col, 30, 220, 0.7, 3);
@@ -1160,7 +1212,21 @@ function applyRemotePlayerSkillCast(msg){
   } else if(id === 'dash_strike'){
     state.fx.push({ring:true, x:x+Math.cos(ang)*180, y:y+Math.sin(ang)*180, color:col, life:0.4, life0:0.4, r:0, _maxR:90});
   } else if(id === 'chain_lightning'){
+    // Best-effort visual: short beam fan in the cast direction so the
+    // arc-lightning is visible even though we don't know the actual chain
+    // targets on the remote client.
     state.fx.push({ring:true, x, y, color:col, life:0.3, life0:0.3, r:0, _maxR:80});
+    for(let i=-1;i<=1;i++){
+      const a = ang + i*0.4;
+      const bx = x + Math.cos(a)*220, by = y + Math.sin(a)*220;
+      state.fx.push({warn:true, ax:x, ay:y, bx, by, color:col, life:0.3, life0:0.3, beamWidth:10});
+    }
+  } else {
+    // Default fallback skill visualization (10 outward bullets)
+    for(let i=0;i<10;i++){
+      const a=(i/10)*Math.PI*2;
+      gb(Math.cos(a)*350, Math.sin(a)*350, 6, 0.7, 1);
+    }
   }
 }
 
