@@ -16,7 +16,7 @@ window.onunhandledrejection = (event) => console.error("ASYNC ERROR:", event.rea
 const HEROES = {
   james: { name:"James", role:"Sword Tank",   img:"heroes/james.png",  hp:180, speed:200, dmg:34, atkCd:0.45, range:62,  abi:"Whirlwind",   abiCd:7,  color:"#22e8ff", desc:"High HP melee bruiser. Strong cleaving sword and a 360° whirlwind that staggers and damages." },
   jake:  { name:"Jake",  role:"Wand Mage",    img:"heroes/jake.png",   hp:95,  speed:215, dmg:22, atkCd:0.85, range:520, abi:"Arcane Nova", abiCd:8,  color:"#ff2bd6", desc:"Slow, powerful magic missiles. Q unleashes a violet nova that detonates outward in a ring." },
-  joross:{ name:"Joross",role:"Plasma Gunner",img:"heroes/joross.png", hp:70, speed:225, dmg:9,  atkCd:0.10, range:480, abi:"Suppress",    abiCd:6,  color:"#ff8a3d", desc:"Continuous plasma fire. Q triples fire-rate for 3s and pierces lightly armored foes." },
+  joross:{ name:"Joross",role:"Plasma Gunner",img:"heroes/joross.png", hp:520, speed:225, dmg:100,  atkCd:0.10, range:480, abi:"Suppress",    abiCd:6,  color:"#ff8a3d", desc:"Continuous plasma fire. Q triples fire-rate for 3s and pierces lightly armored foes." },
   jeb:   { name:"Jeb",   role:"Cross Healer", img:"heroes/jeb.png",    hp:110, speed:215, dmg:14, atkCd:0.55, range:380, abi:"Sanctum",     abiCd:9,  color:"#3dffb0", desc:"Holy bolts and a healing zone." },
   jeff:  { name:"Jeff",  role:"Assassin",     img:"heroes/jeff.png",   hp:70,  speed:285, dmg:48, atkCd:0.35, range:48,  abi:"Phase Slash", abiCd:5,  color:"#ff3d6a", desc:"Glass cannon. Tiny HP, blinding speed, lethal twin daggers." },
 };
@@ -508,6 +508,118 @@ function canAuthorEnemies(){
   return !isMultiMode() || state.isHost;
 }
 
+// ============================================================================
+// MULTIPLAYER BOSS-DAMAGE / FX REPLICATION HELPERS
+// ----------------------------------------------------------------------------
+// Boss AI runs only on the host (see canAuthorEnemies / bossAITick). Without
+// these helpers, a joiner would never see boss skill telegraphs/beams/zones
+// and would never take damage from them. The fix is two-pronged:
+//   1) Host passively broadcasts every newly-pushed hostile fx + every newly-
+//      spawned hostile bullet so joiners can render + simulate them locally.
+//      Their existing updateFx / updateBullets logic will then naturally
+//      damage the joiner's own state.player when the player intersects them.
+//   2) For boss skills that apply damage *directly* (not via fx — e.g. the
+//      teleport_strike / phantom_step / radial_collapse / dash_strike land
+//      hits), the host iterates ALL players (local + remotes) for the radius
+//      check and sends a 'bossHit' message to any non-local player it hits.
+// ============================================================================
+function _hitPlayer(p, dmg, opts){
+  if(!p || p.alive===false || p.downed) return;
+  if(p === state.player){
+    let rem = +dmg || 0;
+    if(p.shield > 0){ const a = Math.min(p.shield, rem); p.shield -= a; rem -= a; }
+    p.hp -= rem;
+    SFX.hurt();
+    if(opts && opts.shake) shake(opts.shake);
+    if(opts && opts.fx)    particles(p.x, p.y, opts.fx, 8, 220, 0.4, 2);
+  } else if(state.isHost && activeRoom && p.id){
+    try{
+      activeRoom.send('bossHit', {
+        targetId: p.id,
+        dmg: +dmg || 0,
+        shake: (opts && opts.shake) || 0,
+      });
+    }catch(e){}
+  }
+}
+function _hitPlayersInRadius(x, y, r, dmg, opts){
+  if(!canAuthorEnemies()) return;
+  const lp = state.player;
+  if(lp && lp.alive !== false && !lp.downed && Math.hypot(lp.x-x, lp.y-y) < r){
+    _hitPlayer(lp, dmg, opts);
+  }
+  if(state.isHost && state.others && state.others.size){
+    for(const o of state.others.values()){
+      if(!o || o.alive===false || o.downed) continue;
+      if(Math.hypot((o.x||0)-x, (o.y||0)-y) < r) _hitPlayer(o, dmg, opts);
+    }
+  }
+}
+function _hitPlayersInAnnulus(x, y, rMin, rMax, dmg, opts){
+  if(!canAuthorEnemies()) return;
+  const all = [];
+  if(state.player) all.push(state.player);
+  if(state.isHost && state.others) for(const o of state.others.values()) all.push(o);
+  for(const p of all){
+    if(!p || p.alive===false || p.downed) continue;
+    const d = Math.hypot((p.x||0)-x, (p.y||0)-y);
+    if(d >= rMin && d <= rMax) _hitPlayer(p, dmg, opts);
+  }
+}
+// Passive scan: at end of host's update tick, broadcast any newly-pushed
+// hostile fx the joiner hasn't seen yet. We mark each fx with `_sent=true`.
+let _lastBossFxBroadcast = 0;
+function broadcastHostileFx(dt){
+  if(!activeRoom || !state.isHost || !state.fx || !state.fx.length) return;
+  _lastBossFxBroadcast += dt || 0;
+  if(_lastBossFxBroadcast < 0.05) return;
+  _lastBossFxBroadcast = 0;
+  const out = [];
+  for(const f of state.fx){
+    if(f._sent) continue;
+    f._sent = true;
+    // Skip player-owned/healing fx and pure cosmetic particles.
+    if(f.heal || f._enemyZone || f.owner) continue;
+    if(!f.warn && !f.beam && !f.ring && !f.zone && !f._shock && !f._pull && !f._flash) continue;
+    out.push({
+      warn:!!f.warn, beam:!!f.beam, ring:!!f.ring, zone:!!f.zone,
+      _shock:!!f._shock, _pull:!!f._pull, _flash:!!f._flash, _shrink:!!f._shrink,
+      x:f.x, y:f.y, ax:f.ax, ay:f.ay, bx:f.bx, by:f.by,
+      r:f.r, _maxR:f._maxR, color:f.color,
+      life:f.life, life0:f.life0,
+      beamFireAt:f.beamFireAt, beamWidth:f.beamWidth,
+      dmg:f.dmg, dps:f.dps,
+      bossId: f._bossRef ? f._bossRef.id : undefined,
+    });
+  }
+  if(out.length){ try{ activeRoom.send('bossFx', { fx: out }); }catch(e){} }
+}
+// Passive scan: same idea for hostile bullets spawned by boss skills.
+let _lastBossBulletBroadcast = 0;
+function broadcastHostileBullets(dt){
+  if(!activeRoom || !state.isHost || !state.bullets || !state.bullets.length) return;
+  _lastBossBulletBroadcast += dt || 0;
+  if(_lastBossBulletBroadcast < 0.05) return;
+  _lastBossBulletBroadcast = 0;
+  const out = [];
+  for(const b of state.bullets){
+    if(b._sent) continue;
+    b._sent = true;
+    if(!b.hostile) continue;
+    out.push({
+      x:b.x, y:b.y, vx:b.vx, vy:b.vy,
+      color:b.color, radius:b.radius,
+      life:b.life, dmg:b.dmg,
+      hostile: true,
+    });
+  }
+  if(out.length){ try{ activeRoom.send('bossBullets', { bullets: out }); }catch(e){} }
+}
+function broadcastPurgeFx(){
+  if(!activeRoom || !state.isHost) return;
+  try{ activeRoom.send('purgeFx', {}); }catch(e){}
+}
+
 function makeEnemy(data){
   return {
     id: data.id || ('e'+(state.enemySeq++)),
@@ -722,9 +834,29 @@ function update(dt){
 
   if(isMultiMode()){
     interpolateOthers(dt);
+    // Continuously ensure every lobby player is in state.others.
+    // This is a cheap O(n) check that fixes any missed seed or delayed join.
+    state.lobby.players.forEach((p, id) => {
+      if(id === state.mySessionId) return;
+      if(!state.others.has(id)){
+        const heroId = safeHeroId(p.heroId);
+        state.others.set(id, {
+          id, heroId, name: p.name||'Player',
+          x: state.arena.w/2, y: state.arena.h/2,
+          rx: state.arena.w/2, ry: state.arena.h/2,
+          angle: 0, hp: HEROES[heroId].hp, hpMax: HEROES[heroId].hp,
+          alive: true, downed: false, mods: makeDefaultMods()
+        });
+      }
+    });
     $('#pillAlive').textContent = `ALIVE ${1 + state.others.size}`;
     broadcastTick(dt);
-    if(state.isHost) broadcastEnemyState(dt);
+    if(state.isHost){
+      broadcastEnemyState(dt);
+      // Replicate boss skill visuals + damage to joiners.
+      broadcastHostileFx(dt);
+      broadcastHostileBullets(dt);
+    }
   }
 
   if(p.hp<=0 && p.alive){
@@ -1266,6 +1398,8 @@ const GOD = (() => {
     // Remove every fx that can damage / move the player after a boss dies.
     state.fx = state.fx.filter(f => !(f.warn || f.beam || f.zone || f._shock || f._pull || f._flash));
     state.bullets = state.bullets.filter(b => !b.hostile);
+    // Tell joiners to do the same so they don't keep getting hit by stale fx.
+    if(typeof broadcastPurgeFx === 'function') broadcastPurgeFx();
   }
 
   function start(){
@@ -1614,12 +1748,7 @@ const GOD = (() => {
             boss.x = nx; boss.y = ny;
             particles(nx, ny, col, 40, 280, 0.7, 3);
             state.fx.push({ring:true, x:nx, y:ny, color:col, life:0.5, life0:0.5, r:radius, _maxR:radius});
-            const pp = state.player;
-            if(pp && pp.alive && !pp.downed && Math.hypot(pp.x-nx, pp.y-ny) < radius){
-              let rem = dmg * BOSS_DMG_MUL;
-              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
-              pp.hp -= rem; SFX.hurt(); shake(10);
-            }
+            _hitPlayersInRadius(nx, ny, radius, dmg * BOSS_DMG_MUL, {shake:10, fx:'#ff3d6a'});
             if(idx+1 < hops){ _schedule(()=>doHop(idx+1), 280); }
           }, warnLife*1000);
         };
@@ -1688,12 +1817,7 @@ const GOD = (() => {
             }
             state.fx.push({ring:true, x, y, color:col, life:0.9, life0:0.9, r:radius-10, _maxR:radius-10});
             _schedule(()=>{
-              const pp = state.player;
-              if(pp && pp.alive && !pp.downed && Math.hypot(pp.x-x, pp.y-y) < radius){
-                let rem=dmg * BOSS_DMG_MUL;
-                if(pp.shield>0){ const a2=Math.min(pp.shield,rem); pp.shield-=a2; rem-=a2; }
-                pp.hp -= rem; SFX.hurt(); shake(8);
-              }
+              _hitPlayersInRadius(x, y, radius, dmg * BOSS_DMG_MUL, {shake:8, fx:'#ff3d6a'});
               particles(x, y, col, 40, 320, 0.7, 4);
               state.fx.push({ring:true, x, y, color:col, life:0.4, life0:0.4, r:radius+20, _maxR:radius+20});
             }, impactDelay);
@@ -1741,12 +1865,7 @@ const GOD = (() => {
             const x = boss.x + Math.cos(ang)*i*70, y = boss.y + Math.sin(ang)*i*70;
             state.fx.push({ring:true, x, y, color:col, life:0.8, life0:0.8, r:40, _maxR:40});
             _schedule(()=>{
-              const p = state.player;
-              if(p && p.alive && !p.downed && Math.hypot(p.x-x, p.y-y) < radius){
-                let rem=dmg * BOSS_DMG_MUL;
-                if(p.shield>0){ const a=Math.min(p.shield,rem); p.shield-=a; rem-=a; }
-                p.hp -= rem; SFX.hurt(); shake(6);
-              }
+              _hitPlayersInRadius(x, y, radius, dmg * BOSS_DMG_MUL, {shake:6, fx:'#ff3d6a'});
               particles(x,y,col,18,260,0.5,3);
             }, delay + i*30);
           }
@@ -1772,12 +1891,7 @@ const GOD = (() => {
             boss.y = Math.max(80, Math.min(state.arena.h-80, boss.y));
             particles(boss.x, boss.y, col, 50, 360, 0.7, 4);
             shake(10);
-            const pp = state.player;
-            if(pp && pp.alive && !pp.downed && Math.hypot(pp.x-boss.x, pp.y-boss.y) < 110){
-              let rem=dmg * BOSS_DMG_MUL;
-              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
-              pp.hp -= rem; SFX.hurt();
-            }
+            _hitPlayersInRadius(boss.x, boss.y, 110, dmg * BOSS_DMG_MUL, {fx:'#ff3d6a'});
             if(dashIdx+1 < dashes){
               _schedule(()=>dashStep(dashIdx+1), 220);
             }
@@ -1891,12 +2005,7 @@ const GOD = (() => {
             particles(sx, sy, col, 50, 360, 0.7, 4);
             state.fx.push({ring:true, x:sx, y:sy, color:col, life:0.55, life0:0.55, r:0, _maxR:radius+30});
             state.fx.push({_shock:true, x:sx, y:sy, life:0.55, life0:0.55, color:col, r:0, _maxR:radius+30, dmg:dmg-6, vx:0, vy:0});
-            const pp = state.player;
-            if(pp && pp.alive && !pp.downed && Math.hypot(pp.x-sx, pp.y-sy) < radius){
-              let rem = dmg * BOSS_DMG_MUL;
-              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
-              pp.hp -= rem; SFX.hurt();
-            }
+            _hitPlayersInRadius(sx, sy, radius, dmg * BOSS_DMG_MUL, {fx:'#ff3d6a'});
           }, warnLife*1000 + i*120);
         }
         shake(10);
@@ -1999,15 +2108,7 @@ const GOD = (() => {
           shake(10);
           state.fx.push({_flash:true, life:0.25, life0:0.25, color:col});
           state.fx.push({ring:true, x:boss.x, y:boss.y, color:col, life:0.35, life0:0.35, r:0, _maxR:120});
-          const pp = state.player;
-          if(pp && pp.alive && !pp.downed){
-            const d = Math.hypot(pp.x-boss.x, pp.y-boss.y);
-            if(d < 110){
-              let rem = dmgIn;
-              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
-              pp.hp -= rem; SFX.hurt();
-            }
-          }
+          _hitPlayersInRadius(boss.x, boss.y, 110, dmgIn, {fx:col});
         }, implodeMs);
         // 3) Outward shockwave: single big expanding ring + 2 timed damage
         // bands at known radii. No bullets — much lighter than nova.
@@ -2025,15 +2126,7 @@ const GOD = (() => {
         const checkBand = (delay, rMin, rMax)=>{
           _schedule(()=>{
             if(!boss || boss.dead) return;
-            const pp = state.player;
-            if(!pp || !pp.alive || pp.downed) return;
-            const d = Math.hypot(pp.x-boss.x, pp.y-boss.y);
-            if(d >= rMin && d <= rMax){
-              let rem = dmgOut;
-              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
-              pp.hp -= rem; SFX.hurt();
-              particles(pp.x, pp.y, col, 18, 220, 0.5, 3);
-            }
+            _hitPlayersInAnnulus(boss.x, boss.y, rMin, rMax, dmgOut, {fx:col});
           }, delay);
         };
         checkBand(explodeAt + 240, 100, finalR*0.55);
@@ -2112,12 +2205,7 @@ const GOD = (() => {
             boss.x = nx; boss.y = ny;
             particles(nx, ny, '#ffffff', 30, 280, 0.6, 3);
             state.fx.push({ring:true, x:nx, y:ny, color:'#ffffff', life:0.4, life0:0.4, r:0, _maxR:radius});
-            const pp = state.player;
-            if(pp && pp.alive && !pp.downed && Math.hypot(pp.x-nx, pp.y-ny) < radius){
-              let rem = dmg * BOSS_DMG_MUL;
-              if(pp.shield>0){ const a=Math.min(pp.shield,rem); pp.shield-=a; rem-=a; }
-              pp.hp -= rem; SFX.hurt(); shake(8);
-            }
+            _hitPlayersInRadius(nx, ny, radius, dmg * BOSS_DMG_MUL, {shake:8, fx:'#ff3d6a'});
             if(idx+1 < hops){
               _schedule(()=>doStep(idx+1), 160);
             } else {
@@ -3435,6 +3523,54 @@ function applyEnemyState(msg){
   }
 }
 
+// ----------------------------------------------------------------------------
+// JOINER-SIDE handlers for boss skill replication (see broadcast helpers).
+// ----------------------------------------------------------------------------
+function applyBossFxMessage(msg){
+  if(state.isHost) return;
+  if(!msg || !Array.isArray(msg.fx)) return;
+  for(const raw of msg.fx){
+    const f = Object.assign({}, raw, { _sent: true });
+    // Re-link _bossRef to the local mirror of that boss so anchored fx
+    // (e.g. radial_collapse contracting ring, gravity_well rings) follow
+    // the boss on the joiner's screen too.
+    if(raw.bossId && Array.isArray(state.enemies)){
+      const boss = state.enemies.find(e => e && e.id === raw.bossId);
+      if(boss) f._bossRef = boss;
+    }
+    state.fx.push(f);
+  }
+}
+function applyBossBulletsMessage(msg){
+  if(state.isHost) return;
+  if(!msg || !Array.isArray(msg.bullets)) return;
+  for(const raw of msg.bullets){
+    state.bullets.push({
+      x: raw.x, y: raw.y, vx: raw.vx, vy: raw.vy,
+      color: raw.color, radius: raw.radius || 9,
+      life: raw.life || 3.5, dmg: raw.dmg || 0,
+      hostile: true, trail: [], _sent: true,
+    });
+  }
+}
+function applyBossHitMessage(msg){
+  if(state.isHost) return;
+  if(!msg || msg.targetId !== state.mySessionId) return;
+  const p = state.player;
+  if(!p || !p.alive || p.downed) return;
+  let rem = +msg.dmg || 0;
+  if(p.shield > 0){ const a = Math.min(p.shield, rem); p.shield -= a; rem -= a; }
+  p.hp -= rem;
+  SFX.hurt();
+  if(msg.shake) shake(msg.shake);
+  particles(p.x, p.y, '#ff3d6a', 8, 220, 0.4, 2);
+}
+function applyPurgeFxMessage(){
+  if(state.isHost) return;
+  state.fx = state.fx.filter(f => !(f.warn || f.beam || f.zone || f._shock || f._pull || f._flash));
+  state.bullets = state.bullets.filter(b => !b.hostile);
+}
+
 function setCountdownText(text){
   const el = document.getElementById('countdown');
   if(el) el.textContent = text;
@@ -3473,55 +3609,7 @@ async function joinRoom(roomName, options = {}){
     $('#lobbyCode').textContent = '· ' + (roomName === 'battle_room' ? activeRoom.id : roomName);
     setCountdownText('');
 
-    const refresh = () => {
-      const m = new Map();
-      activeRoom.state.players.forEach((p, id) => {
-        m.set(id, { id, name: p.name, heroId: p.heroId, ready: !!p.ready, isHost: !!p.isHost });
-      });
-      state.lobby.players = m;
-      state.isHost = (activeRoom.state.hostId === state.mySessionId);
-      state.lobby.phase = activeRoom.state.phase || 'waiting';
-      state.lobby.countdown = activeRoom.state.countdown || 0;
-      renderLobby();
-    };
-
-    activeRoom.onStateChange(refresh);
-    refresh();
-
-    if(activeRoom.state.players && typeof activeRoom.state.players.onRemove === 'function'){
-      activeRoom.state.players.onRemove((_p, id) => {
-        if(state.others && state.others.has(id)){
-          if(state.reviveTarget && state.reviveTarget.id === id){ state.reviveTarget = null; state.reviveHoldTime = 0; }
-          state.others.delete(id);
-        }
-      });
-    }
-
-    activeRoom.onMessage('countdown', (msg) => {
-      state.lobby.countdown = msg.n || 0;
-      if(msg.cancelled || !msg.n){ setCountdownText(''); renderLobby(); }
-      else { setCountdownText(msg.n > 0 ? msg.n : 'GO'); }
-    });
-
-    activeRoom.onMessage('startGame', (msg) => {
-      console.log('[net] startGame received', msg);
-      setCountdownText('');
-      try{ startGame(state.mode === 'godmulti' ? 'godmulti' : 'multi'); }
-      catch(e){ console.error('startGame failed:', e); alert('startGame error: '+e.message); }
-    });
-
-    activeRoom.onMessage('playerState', (msg) => applyRemoteState(msg));
-    activeRoom.onMessage('enemyState', (msg) => applyEnemyState(msg));
-
-    activeRoom.onMessage('hostMigrated', (msg) => {
-      const wasHost = state.isHost;
-      state.isHost = (msg && msg.hostId === state.mySessionId);
-      if(state.isHost && !wasHost){
-        state.bullets = state.bullets.filter(b => b.owner !== state.player.id);
-        toast('You are now the host', 1800);
-      }
-    });
-    activeRoom.onMessage('revive', (msg) => handleReviveMessage(msg));
+    bindRoomHandlers();
 
     activeRoom.onLeave(() => { console.log('[net] left room'); });
     activeRoom.onError((code, message) => { console.error('[net] room error', code, message); alert('Room error: '+message); });
@@ -3601,7 +3689,7 @@ function playRemoteAction(other, act, opts={}){
 function applyRemoteState(msg){
   if(!msg || !msg.id || msg.id === state.mySessionId) return;
   const ex = state.others.get(msg.id) || { id: msg.id, x: msg.x||0, y: msg.y||0, rx: msg.x||0, ry: msg.y||0, alive: true, downed: false, mods: makeDefaultMods() };
-  ex.heroId = msg.heroId || ex.heroId || 'james';
+  ex.heroId = safeHeroId(msg.heroId || ex.heroId);
   ex.name = msg.name || ex.name || 'Player';
   ex.angle = (typeof msg.angle === 'number') ? msg.angle : (ex.angle||0);
   ex.hp = (typeof msg.hp === 'number') ? msg.hp : ex.hp;
@@ -3687,6 +3775,7 @@ $('#btnJoin').onclick = ()=>{
       if(activeRoom){ try{ await activeRoom.leave(); }catch(e){} activeRoom=null; }
       activeRoom = await client.joinById(code, { name: state.username || 'Operator', heroId: state.hero });
       state.roomCode = activeRoom.id; state.mySessionId = activeRoom.sessionId;
+      state.lobby.players.clear(); state.lobby.phase = 'waiting'; state.lobby.countdown = 0;
       bindRoomHandlers();
       setScene('lobby');
       $('#lobbyCode').textContent = '· '+activeRoom.id;
@@ -3697,9 +3786,27 @@ $('#btnJoin').onclick = ()=>{
   };
 };
 
+function safeHeroId(id){ return (id && HEROES[id]) ? id : 'james'; }
+
+function seedOthersFromRoom(){
+  // Use state.lobby.players — a plain JS Map built by refresh() — for
+  // reliable iteration (avoids Colyseus MapSchema quirks).
+  state.lobby.players.forEach((p, id) => {
+    if(id === state.mySessionId) return;
+    const heroId = safeHeroId(p.heroId);
+    state.others.set(id, {
+      id, heroId, name: p.name || 'Player',
+      x: state.arena.w/2, y: state.arena.h/2,
+      rx: state.arena.w/2, ry: state.arena.h/2,
+      angle: 0,
+      hp: HEROES[heroId].hp, hpMax: HEROES[heroId].hp,
+      alive: true, downed: false, mods: makeDefaultMods()
+    });
+  });
+}
+
 function bindRoomHandlers(){
   if(!activeRoom) return;
-  state.lobby.players.clear();
   const refresh = () => {
     const m = new Map();
     activeRoom.state.players.forEach((p, id) => {
@@ -3721,9 +3828,19 @@ function bindRoomHandlers(){
     });
   }
   activeRoom.onMessage('countdown', (msg)=>{ state.lobby.countdown = msg.n||0; if(msg.cancelled||!msg.n){ setCountdownText(''); renderLobby(); } else setCountdownText(msg.n>0?msg.n:'GO'); });
-  activeRoom.onMessage('startGame', ()=>{ setCountdownText(''); try{ startGame(state.mode === 'godmulti' ? 'godmulti' : 'multi'); }catch(e){ console.error(e); } });
+  activeRoom.onMessage('startGame', ()=>{
+    setCountdownText('');
+    try{
+      startGame(state.mode === 'godmulti' ? 'godmulti' : 'multi');
+      seedOthersFromRoom();
+    }catch(e){ console.error(e); }
+  });
   activeRoom.onMessage('playerState', (msg)=> applyRemoteState(msg));
   activeRoom.onMessage('enemyState', (msg)=> applyEnemyState(msg));
+  activeRoom.onMessage('bossFx', (msg)=> applyBossFxMessage(msg));
+  activeRoom.onMessage('bossBullets', (msg)=> applyBossBulletsMessage(msg));
+  activeRoom.onMessage('bossHit', (msg)=> applyBossHitMessage(msg));
+  activeRoom.onMessage('purgeFx', ()=> applyPurgeFxMessage());
   activeRoom.onMessage('hostMigrated', (msg)=>{
     const wasHost = state.isHost;
     state.isHost = (msg && msg.hostId === state.mySessionId);

@@ -72,6 +72,24 @@ class GameRoom extends colyseus.Room {
       this.broadcast("enemyState", payload, { except: client });
     });
 
+    // Boss skill replication: only host may author these.
+    this.onMessage("bossFx", (client, payload) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("bossFx", payload, { except: client });
+    });
+    this.onMessage("bossBullets", (client, payload) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("bossBullets", payload, { except: client });
+    });
+    this.onMessage("bossHit", (client, payload) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("bossHit", payload, { except: client });
+    });
+    this.onMessage("purgeFx", (client, payload) => {
+      if (client.sessionId !== this.state.hostId || this.state.phase !== "in-game") return;
+      this.broadcast("purgeFx", payload || {}, { except: client });
+    });
+
     // Revive: forward to everyone (including host) so the downed player can
     // be brought back up. Host applies it authoritatively for enemies; the
     // downed client re-enables their own controls when they receive it.
