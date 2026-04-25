@@ -112,6 +112,29 @@ class GameRoom extends colyseus.Room {
     this.onMessage("revive", (client, payload) => {
       this.broadcast("revive", { from: client.sessionId, ...(payload || {}) });
     });
+
+    // Game over / return to lobby — resets phase and ready flags so a new
+    // game can be started without everyone needing to reconnect.
+    this.onMessage("gameEnd", (client) => {
+      if (this.state.phase !== "in-game") return;
+      this.resetToLobby();
+    });
+  }
+
+  // Reset room back to lobby state so players can ready-up for a new game.
+  resetToLobby() {
+    if (this.countdownInterval) {
+      clearInterval(this.countdownInterval);
+      this.countdownInterval = null;
+    }
+    this.state.phase = "waiting";
+    this.state.countdown = 0;
+    for (const pl of this.state.players.values()) {
+      pl.ready = false;
+      pl.alive = true;
+      pl.downed = false;
+    }
+    console.log(`[lobby] reset to waiting`);
   }
 
   migrateHost(excludeId) {
@@ -153,14 +176,36 @@ class GameRoom extends colyseus.Room {
     console.log(`[join] ${client.sessionId} as ${p.name} (${p.heroId}) host=${p.isHost}`);
   }
 
-  onLeave(client) {
+  async onLeave(client, consented) {
+    // Allow a 30-second reconnection window during in-game so a brief
+    // network hiccup (mobile, tab switch) doesn't permanently kick the joiner.
+    if (!consented && this.state.phase === "in-game") {
+      console.log(`[leave] ${client.sessionId} — holding for reconnect`);
+      try {
+        await this.allowReconnection(client, 30);
+        console.log(`[rejoin] ${client.sessionId} reconnected`);
+        return;
+      } catch (e) {
+        console.log(`[leave] ${client.sessionId} — reconnect timeout, removing`);
+      }
+    } else {
+      console.log(`[leave] ${client.sessionId}`);
+    }
+
     this.state.players.delete(client.sessionId);
-    console.log(`[leave] ${client.sessionId}`);
-    // Promote new host if needed
+
+    // Promote new host if the host left.
     if (this.state.hostId === client.sessionId) {
       this.migrateHost(client.sessionId);
     }
-    // Cancel countdown if player count drops below 2
+
+    if (this.state.phase === "in-game") {
+      // Don't touch the countdown or evaluate start during active gameplay.
+      // If only one player remains, they keep playing as solo host.
+      return;
+    }
+
+    // Cancel countdown if player count drops below 2 during lobby.
     if (this.state.players.size < 2 && this.state.phase === "starting") {
       this.cancelCountdown();
     } else {

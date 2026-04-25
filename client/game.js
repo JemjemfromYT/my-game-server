@@ -729,6 +729,9 @@ function endGame(victory=false){
   const phaseLabel = isGodMode() ? `Reached Phase ${state.god ? state.god.phase : 1}/10` : `Wave ${state.wave}`;
   $('#endStats').innerHTML = `Survived ${Math.floor(t/60)}m ${t%60}s · ${state.kills} kills · ${phaseLabel}`;
   hideBossBar();
+  // Notify server that the game has ended so it resets phase → waiting,
+  // allowing players to ready-up for a new game without reconnecting.
+  if(isMultiMode() && activeRoom){ try{ activeRoom.send('gameEnd', {}); }catch(e){} }
 }
 
 // ---------- Wave logic (classic) ----------
